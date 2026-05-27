@@ -43,3 +43,29 @@ def decode_token(
     except JWTError:
 
         return None
+
+
+def create_refresh_token(
+    user_id,
+):
+
+    payload = {
+        "sub":
+        user_id,
+
+        "type":
+        "refresh",
+
+        "exp":
+        datetime.utcnow()
+        + timedelta(
+            days=30
+        ),
+    }
+
+    return jwt.encode(
+        payload,
+        settings.JWT_SECRET,
+        algorithm=
+        settings.JWT_ALGORITHM,
+    )

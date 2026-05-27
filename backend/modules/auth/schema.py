@@ -4,17 +4,16 @@ from pydantic import EmailStr
 
 class RegisterInput(BaseModel):
     full_name: str
-
     email: EmailStr
-
     password: str
-
     organization: str
 
-class LoginInput(
-    BaseModel
-):
-
+class LoginInput(BaseModel):
     email: EmailStr
-
     password: str
+
+class RefreshInput(BaseModel):
+    refresh_token: str
+
+class LogoutInput(BaseModel):
+    refresh_token: str

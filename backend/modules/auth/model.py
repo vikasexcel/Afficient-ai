@@ -2,7 +2,7 @@ from sqlalchemy import String
 from sqlalchemy.orm import Mapped
 from sqlalchemy.orm import mapped_column
 from database.base import BaseModel
-
+from modules.auth.audit_model import AuditLog
 
 class User(BaseModel):
     __tablename__ = "users"
