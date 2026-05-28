@@ -7,13 +7,7 @@ export default function AppLayout({
   children: React.ReactNode;
 }) {
   return (
-    <div
-      className="
-        flex
-        bg-black
-        text-white
-      "
-    >
+    <div className="flex min-h-screen bg-background text-foreground">
       <Sidebar />
 
       <div
@@ -23,11 +17,7 @@ export default function AppLayout({
       >
         <Header />
 
-        <div
-          className="
-            p-8
-          "
-        >
+        <div className="app-content p-8">
           {children}
         </div>
       </div>

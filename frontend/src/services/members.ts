@@ -22,6 +22,8 @@ export type CreateMemberInput = {
 export type CreateMemberResult = {
   member: Member;
   temp_password: string | null;
+  account_exists: boolean;
+  email_sent: boolean;
 };
 
 export async function listMembers(): Promise<Member[]> {
@@ -48,13 +50,22 @@ export async function updateRole(
 
 export async function resetMemberPassword(
   membership_id: string
-): Promise<{ temp_password: string }> {
-  const res = await api.post<{ temp_password: string }>(
+): Promise<{ temp_password: string; email_sent: boolean }> {
+  const res = await api.post<{ temp_password: string; email_sent: boolean }>(
     `/members/${membership_id}/reset-password`
   );
   return res.data;
 }
 
-export async function removeMember(membership_id: string): Promise<void> {
-  await api.delete(`/members/${membership_id}`);
+export type RemoveMemberResult = {
+  removed: boolean;
+  user_deleted: boolean;
+  email_sent: boolean;
+};
+
+export async function removeMember(
+  membership_id: string
+): Promise<RemoveMemberResult> {
+  const res = await api.delete<RemoveMemberResult>(`/members/${membership_id}`);
+  return res.data;
 }

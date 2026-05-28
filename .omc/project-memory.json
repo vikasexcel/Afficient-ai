@@ -1,0 +1,125 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1779970336388,
+  "projectRoot": "/home/node/afficient-ai",
+  "techStack": {
+    "languages": [],
+    "frameworks": [],
+    "packageManager": null,
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": null,
+    "lintCommand": null,
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "docs",
+      "scripts"
+    ],
+    "gitBranches": null
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "backend": {
+      "path": "backend",
+      "purpose": null,
+      "fileCount": 8,
+      "lastAccessed": 1779970336378,
+      "keyFiles": [
+        "Dockerfile",
+        "alembic.ini",
+        "docker-compose.yml",
+        "main.py",
+        "requirements.txt"
+      ]
+    },
+    "deployment": {
+      "path": "deployment",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1779970336381,
+      "keyFiles": []
+    },
+    "docs": {
+      "path": "docs",
+      "purpose": "Documentation",
+      "fileCount": 1,
+      "lastAccessed": 1779970336381,
+      "keyFiles": [
+        "DEPLOY_AWS.md"
+      ]
+    },
+    "frontend": {
+      "path": "frontend",
+      "purpose": null,
+      "fileCount": 11,
+      "lastAccessed": 1779970336382,
+      "keyFiles": [
+        "README.md",
+        "components.json",
+        "eslint.config.js",
+        "index.html",
+        "package-lock.json"
+      ]
+    },
+    "scripts": {
+      "path": "scripts",
+      "purpose": "Build/utility scripts",
+      "fileCount": 0,
+      "lastAccessed": 1779970336385,
+      "keyFiles": []
+    },
+    "backend/config": {
+      "path": "backend/config",
+      "purpose": "Configuration files",
+      "fileCount": 2,
+      "lastAccessed": 1779970336385,
+      "keyFiles": [
+        "__init__.py",
+        "settings.py"
+      ]
+    },
+    "frontend/dist": {
+      "path": "frontend/dist",
+      "purpose": "Distribution/build output",
+      "fileCount": 3,
+      "lastAccessed": 1779970336386,
+      "keyFiles": [
+        "favicon.svg",
+        "icons.svg",
+        "index.html"
+      ]
+    },
+    "frontend/node_modules": {
+      "path": "frontend/node_modules",
+      "purpose": "Dependencies",
+      "fileCount": 1,
+      "lastAccessed": 1779970336388,
+      "keyFiles": []
+    },
+    "frontend/public": {
+      "path": "frontend/public",
+      "purpose": "Public files",
+      "fileCount": 2,
+      "lastAccessed": 1779970336388,
+      "keyFiles": [
+        "favicon.svg",
+        "icons.svg"
+      ]
+    }
+  },
+  "hotPaths": [],
+  "userDirectives": []
+}

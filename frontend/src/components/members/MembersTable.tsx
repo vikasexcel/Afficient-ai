@@ -30,6 +30,7 @@ type Props = {
   members: Member[];
   loading: boolean;
   canManage: boolean;
+  currentRole?: Role | null;
   currentMembershipId?: string | null;
   onChangeRole: (m: Member, role: Role) => void;
   onResetPassword: (m: Member) => void;
@@ -46,11 +47,14 @@ export function MembersTable({
   members,
   loading,
   canManage,
+  currentRole,
   currentMembershipId,
   onChangeRole,
   onResetPassword,
   onRemove,
 }: Props) {
+  const isOwnerActor = currentRole === "owner";
+  const ownerCount = members.filter((m) => m.role === "owner").length;
   return (
     <Table>
       <TableHeader>
@@ -97,7 +101,14 @@ export function MembersTable({
           members.map((m) => {
             const isSelf = m.membership_id === currentMembershipId;
             const isOwner = m.role === "owner";
-            const canTouchRow = canManage && !isOwner;
+            const isLastOwner = isOwner && ownerCount <= 1;
+
+            // Permission gates that mirror the backend so the UI never offers
+            // an action that the server will reject.
+            const canEditRole = canManage && !isSelf;
+            const canRemove = canManage && !isSelf && (!isOwner || isOwnerActor) && !isLastOwner;
+            const canResetPassword =
+              canManage && !isSelf && (!isOwner || isOwnerActor);
 
             return (
               <TableRow
@@ -136,14 +147,13 @@ export function MembersTable({
                   </Badge>
                 </TableCell>
                 <TableCell className="text-right">
-                  {canManage && (
+                  {canManage && !isSelf && (
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button
                           variant="ghost"
                           size="icon"
                           className="h-7 w-7 text-white/40 hover:text-white"
-                          disabled={!canTouchRow && isOwner}
                           aria-label="Actions"
                         >
                           <MoreHorizontal size={14} />
@@ -160,7 +170,7 @@ export function MembersTable({
 
                         <DropdownMenuSub>
                           <DropdownMenuSubTrigger
-                            disabled={!canTouchRow}
+                            disabled={!canEditRole}
                             className="text-[12px]"
                           >
                             Edit role
@@ -172,20 +182,31 @@ export function MembersTable({
                                 onChangeRole(m, v as Role)
                               }
                             >
-                              {ROLE_OPTIONS.map((r) => (
-                                <DropdownMenuRadioItem
-                                  key={r}
-                                  value={r}
-                                  className="text-[12px] capitalize"
-                                >
-                                  {roleLabel(r)}
-                                </DropdownMenuRadioItem>
-                              ))}
+                              {ROLE_OPTIONS.map((r) => {
+                                const promotingToOwner =
+                                  r === "owner" && m.role !== "owner";
+                                const demotingLastOwner =
+                                  m.role === "owner" && r !== "owner" && isLastOwner;
+                                const disabled =
+                                  (promotingToOwner && !isOwnerActor) ||
+                                  demotingLastOwner;
+                                return (
+                                  <DropdownMenuRadioItem
+                                    key={r}
+                                    value={r}
+                                    disabled={disabled}
+                                    className="text-[12px] capitalize"
+                                  >
+                                    {roleLabel(r)}
+                                  </DropdownMenuRadioItem>
+                                );
+                              })}
                             </DropdownMenuRadioGroup>
                           </DropdownMenuSubContent>
                         </DropdownMenuSub>
 
                         <DropdownMenuItem
+                          disabled={!canResetPassword}
                           className="text-[12px]"
                           onClick={() => onResetPassword(m)}
                         >
@@ -194,7 +215,7 @@ export function MembersTable({
 
                         <DropdownMenuSeparator className="bg-white/[0.06]" />
                         <DropdownMenuItem
-                          disabled={!canTouchRow || isSelf}
+                          disabled={!canRemove}
                           className="text-[12px] text-red-400 focus:text-red-400 focus:bg-red-500/[0.08]"
                           onClick={() => onRemove(m)}
                         >

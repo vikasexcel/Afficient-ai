@@ -25,6 +25,8 @@ class CreateMemberInput(BaseModel):
 class CreateMemberOut(BaseModel):
     member: MemberOut
     temp_password: Optional[str] = None
+    account_exists: bool = False
+    email_sent: bool = False
 
 
 class UpdateRoleInput(BaseModel):
@@ -33,3 +35,10 @@ class UpdateRoleInput(BaseModel):
 
 class ResetPasswordOut(BaseModel):
     temp_password: str
+    email_sent: bool = False
+
+
+class RemoveMemberOut(BaseModel):
+    removed: bool
+    user_deleted: bool = False
+    email_sent: bool = False

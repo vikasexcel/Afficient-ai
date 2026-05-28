@@ -27,6 +27,33 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_MINUTES: int
 
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM_NAME: str = "Aifficient"
+    APP_LOGIN_URL: str = "http://localhost:5173/login"
+
+    # LiveKit
+    LIVEKIT_URL: str = "ws://localhost:7880"
+    LIVEKIT_API_KEY: str = ""
+    LIVEKIT_API_SECRET: str = ""
+    LIVEKIT_TOKEN_TTL_MINUTES: int = 60
+    LIVEKIT_DEFAULT_EMPTY_TIMEOUT: int = 300
+    LIVEKIT_DEFAULT_MAX_PARTICIPANTS: int = 20
+
+    # ElevenLabs TTS
+    ELEVENLABS_API_KEY: str = ""
+    ELEVENLABS_VOICE_ID: str = ""
+    ELEVENLABS_MODEL_ID: str = "eleven_turbo_v2_5"
+    ELEVENLABS_SAMPLE_RATE: int = 24000
+    ELEVENLABS_AGENT_IDENTITY: str = "ai-agent"
+    ELEVENLABS_AGENT_NAME: str = "AI Agent"
+
+    # Logging
+    LOG_LEVEL: str = "INFO"
+    LOG_JSON: bool = False
+
 
 @lru_cache
 def get_settings() -> Settings:

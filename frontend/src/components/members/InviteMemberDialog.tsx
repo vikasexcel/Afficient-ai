@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Copy, Loader2 } from "lucide-react";
+import { Copy, Info, Loader2, Mail } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -37,12 +37,18 @@ export function InviteMemberDialog({ open, onOpenChange, onCreated }: Props) {
   const [role, setRole] = useState<Role>("member");
   const [submitting, setSubmitting] = useState(false);
   const [tempPassword, setTempPassword] = useState<string | null>(null);
+  const [accountExists, setAccountExists] = useState(false);
+  const [emailSent, setEmailSent] = useState(false);
+  const [done, setDone] = useState(false);
 
   function reset() {
     setName("");
     setEmail("");
     setRole("member");
     setTempPassword(null);
+    setAccountExists(false);
+    setEmailSent(false);
+    setDone(false);
   }
 
   async function submit() {
@@ -54,10 +60,13 @@ export function InviteMemberDialog({ open, onOpenChange, onCreated }: Props) {
     try {
       const res = await createMember({
         full_name: name.trim(),
-        email: email.trim(),
+        email: email.trim().toLowerCase(),
         role,
       });
       setTempPassword(res.temp_password ?? null);
+      setAccountExists(!!res.account_exists);
+      setEmailSent(!!res.email_sent);
+      setDone(true);
       onCreated();
     } catch (err: any) {
       const msg = err?.response?.data?.detail ?? "Failed to invite member";
@@ -81,14 +90,14 @@ export function InviteMemberDialog({ open, onOpenChange, onCreated }: Props) {
       }}
     >
       <DialogContent className="bg-[#0f0f12] border-white/[0.08] sm:max-w-[440px]">
-        {!tempPassword ? (
+        {!done ? (
           <>
             <DialogHeader>
               <DialogTitle className="text-[15px] font-medium">
                 Invite a member
               </DialogTitle>
               <DialogDescription className="text-[12px] text-white/40">
-                We'll create their account with a temporary password.
+                We'll create their account and email them the sign-in details.
               </DialogDescription>
             </DialogHeader>
 
@@ -173,30 +182,51 @@ export function InviteMemberDialog({ open, onOpenChange, onCreated }: Props) {
           <>
             <DialogHeader>
               <DialogTitle className="text-[15px] font-medium">
-                Member created
+                Member added
               </DialogTitle>
               <DialogDescription className="text-[12px] text-white/40">
-                Share this temporary password with them. It won't be shown
-                again.
+                {accountExists
+                  ? "This person already has an Aifficient account, so they'll sign in with their existing password."
+                  : emailSent
+                    ? `We've emailed sign-in details to ${email.trim()}.`
+                    : "Share this temporary password with them. It won't be shown again."}
               </DialogDescription>
             </DialogHeader>
 
-            <div className="my-3 rounded-[8px] border border-white/[0.08] bg-white/[0.03] p-3 flex items-center justify-between gap-3">
-              <code className="text-[13px] text-violet-300 font-mono break-all">
-                {tempPassword}
-              </code>
-              <Button
-                size="icon"
-                variant="ghost"
-                className="h-7 w-7 text-white/50 hover:text-white shrink-0"
-                onClick={() => {
-                  navigator.clipboard.writeText(tempPassword);
-                  toast.success("Copied to clipboard");
-                }}
-              >
-                <Copy size={13} />
-              </Button>
-            </div>
+            {accountExists ? (
+              <div className="my-3 rounded-[8px] border border-violet-500/20 bg-violet-500/[0.06] p-3 flex gap-2.5 items-start">
+                <Info size={14} className="text-violet-300 shrink-0 mt-0.5" />
+                <p className="text-[12px] text-white/70 leading-relaxed">
+                  No new password was created. Ask {email.trim()} to log in with
+                  the password they already use.
+                </p>
+              </div>
+            ) : tempPassword ? (
+              <div className="my-3 space-y-2">
+                <div className="rounded-[8px] border border-white/[0.08] bg-white/[0.03] p-3 flex items-center justify-between gap-3">
+                  <code className="text-[13px] text-violet-300 font-mono break-all">
+                    {tempPassword}
+                  </code>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7 text-white/50 hover:text-white shrink-0"
+                    onClick={() => {
+                      navigator.clipboard.writeText(tempPassword);
+                      toast.success("Copied to clipboard");
+                    }}
+                  >
+                    <Copy size={13} />
+                  </Button>
+                </div>
+                {emailSent && (
+                  <p className="flex items-center gap-1.5 text-[11px] text-white/40 px-1">
+                    <Mail size={11} className="text-violet-300/80" />
+                    Also sent to {email.trim()}.
+                  </p>
+                )}
+              </div>
+            ) : null}
 
             <DialogFooter>
               <Button onClick={close} className="bg-violet-600 hover:bg-violet-500">

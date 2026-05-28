@@ -122,7 +122,7 @@ export default function Sidebar() {
 
   return (
     <aside className="w-[232px] h-screen bg-[#07070a] border-r border-white/[0.05] flex flex-col">
-      <div className="h-[52px] flex items-center px-5 border-b border-white/[0.05]">
+      <div className="sidebar-brand h-[52px] flex items-center px-5 border-b border-white/[0.05]">
         <span
           className="text-[13px] font-medium text-white"
           style={{ letterSpacing: "0.2em" }}
@@ -197,7 +197,7 @@ function NavItem({ to, label, icon: Icon }: Item) {
       end
       className={({ isActive }) =>
         [
-          "flex items-center gap-2.5 h-8 px-3 rounded-[7px] text-[13px] transition-colors",
+          "nav-item flex items-center gap-2.5 h-8 px-3 rounded-[7px] text-[13px] transition-colors",
           isActive
             ? "bg-white/[0.04] text-white"
             : "text-white/50 hover:text-white/85 hover:bg-white/[0.03]",

@@ -5,11 +5,21 @@
 
 @custom-variant dark (&:is(.dark *));
 
-body{
-margin:0;
-background:#09090b;
-color:white;
-font-family:Inter;
+body {
+  margin: 0;
+  font-family: Inter, system-ui, sans-serif;
+}
+
+html[data-density="compact"] .app-content {
+  padding: 1.25rem;
+}
+
+html[data-density="compact"] .nav-item {
+  height: 1.75rem;
+}
+
+html[data-density="compact"] .sidebar-brand {
+  height: 2.75rem;
 }
 
 @theme inline {
@@ -127,11 +137,140 @@ font-family:Inter;
 @layer base {
   * {
     @apply border-border outline-ring/50;
-}
+  }
   body {
     @apply bg-background text-foreground;
-}
+  }
   html {
     @apply font-sans;
+  }
 }
+
+/*
+ * Light-theme readability safety net.
+ *
+ * Many components in this app were originally authored against a dark surface
+ * using hardcoded utilities like `text-white`, `text-white/40`, `bg-[#07070a]`,
+ * `bg-white/[0.04]`, and `border-white/[0.06]`. When the user switches to the
+ * light theme via the Appearance settings, those values become invisible
+ * (white text on white background, near-transparent surfaces, etc).
+ *
+ * Rather than touching every page, we centralize the fix here: when the `dark`
+ * class is NOT present on <html> (i.e. light theme is active), remap the
+ * common dark-built patterns to readable equivalents. Brand accent colors
+ * (violet/emerald/amber/red/etc.) are intentionally left alone so they still
+ * read as the same brand color in both themes.
+ */
+html:not(.dark) {
+  color-scheme: light;
 }
+
+html:not(.dark) body {
+  background-color: #fafafa;
+  color: #0a0a0d;
+}
+
+/* Solid white text -> near-black foreground */
+html:not(.dark) .text-white {
+  color: rgb(15 15 18) !important;
+}
+
+/* text-white/<alpha> variants -> tinted near-black */
+html:not(.dark) [class*="text-white/25"],
+html:not(.dark) [class*="text-white/30"] {
+  color: rgb(15 15 18 / 0.5) !important;
+}
+html:not(.dark) [class*="text-white/35"],
+html:not(.dark) [class*="text-white/40"],
+html:not(.dark) [class*="text-white/45"],
+html:not(.dark) [class*="text-white/50"] {
+  color: rgb(15 15 18 / 0.6) !important;
+}
+html:not(.dark) [class*="text-white/55"],
+html:not(.dark) [class*="text-white/60"],
+html:not(.dark) [class*="text-white/65"],
+html:not(.dark) [class*="text-white/70"] {
+  color: rgb(15 15 18 / 0.72) !important;
+}
+html:not(.dark) [class*="text-white/75"],
+html:not(.dark) [class*="text-white/80"],
+html:not(.dark) [class*="text-white/85"],
+html:not(.dark) [class*="text-white/90"],
+html:not(.dark) [class*="text-white/95"] {
+  color: rgb(15 15 18 / 0.88) !important;
+}
+
+/* Solid dark page/panel backgrounds -> light surfaces */
+html:not(.dark) .bg-black {
+  background-color: #ffffff !important;
+}
+html:not(.dark) [class*="bg-[#07070a]"],
+html:not(.dark) [class*="bg-[#09090b]"],
+html:not(.dark) [class*="bg-[#0a0a0d]"],
+html:not(.dark) [class*="bg-[#0c0c10]"],
+html:not(.dark) [class*="bg-[#0f0f12]"],
+html:not(.dark) [class*="bg-[#0f0f14]"],
+html:not(.dark) [class*="bg-[#111114]"] {
+  background-color: #ffffff !important;
+  color: rgb(15 15 18);
+}
+
+/* Hover state for the dark-tinted hover bgs used on cards */
+html:not(.dark) [class*="hover:bg-[#0f0f14]"]:hover {
+  background-color: #f4f4f5 !important;
+}
+
+/* Subtle white-alpha surface tints -> subtle black-alpha on light */
+html:not(.dark) [class*="bg-white/[0.02]"],
+html:not(.dark) [class*="bg-white/[0.03]"] {
+  background-color: rgb(0 0 0 / 0.025) !important;
+}
+html:not(.dark) [class*="bg-white/[0.04]"],
+html:not(.dark) [class*="bg-white/[0.05]"],
+html:not(.dark) [class*="bg-white/[0.06]"] {
+  background-color: rgb(0 0 0 / 0.04) !important;
+}
+html:not(.dark) [class*="bg-white/[0.08]"],
+html:not(.dark) [class*="bg-white/[0.1]"],
+html:not(.dark) [class*="bg-white/[0.12]"] {
+  background-color: rgb(0 0 0 / 0.06) !important;
+}
+
+/* Hover variants for those same tints */
+html:not(.dark) [class*="hover:bg-white/[0.03]"]:hover,
+html:not(.dark) [class*="hover:bg-white/[0.04]"]:hover,
+html:not(.dark) [class*="hover:bg-white/[0.05]"]:hover,
+html:not(.dark) [class*="hover:bg-white/[0.06]"]:hover,
+html:not(.dark) [class*="hover:bg-white/[0.08]"]:hover {
+  background-color: rgb(0 0 0 / 0.07) !important;
+}
+
+/* White-alpha borders -> subtle black-alpha borders */
+html:not(.dark) [class*="border-white/[0.04]"],
+html:not(.dark) [class*="border-white/[0.05]"],
+html:not(.dark) [class*="border-white/[0.06]"],
+html:not(.dark) [class*="border-white/[0.08]"],
+html:not(.dark) [class*="border-white/[0.1]"],
+html:not(.dark) [class*="border-white/[0.12]"] {
+  border-color: rgb(0 0 0 / 0.12) !important;
+}
+
+/* Hover border variants */
+html:not(.dark) [class*="hover:border-white/[0.12]"]:hover,
+html:not(.dark) [class*="hover:border-white/[0.16]"]:hover,
+html:not(.dark) [class*="hover:border-white/[0.2]"]:hover {
+  border-color: rgb(0 0 0 / 0.22) !important;
+}
+
+/* Inputs that hardcoded white text/placeholder need legible colors */
+html:not(.dark) input,
+html:not(.dark) textarea,
+html:not(.dark) select {
+  color: rgb(15 15 18);
+}
+html:not(.dark) input::placeholder,
+html:not(.dark) textarea::placeholder {
+  color: rgb(15 15 18 / 0.45);
+}
+
+/* Sidebar/header brand text already use violet for accents — leave alone. */

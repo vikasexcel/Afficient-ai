@@ -33,6 +33,45 @@ services:
       timeout: 3s
       retries: 10
 
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: aifficient_livekit
+    restart: unless-stopped
+    command: --dev --bind 0.0.0.0
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY:-devkey}: ${LIVEKIT_API_SECRET:-secret_change_me_at_least_32_chars_long}"
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "7882:7882/udp"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7880"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aifficient_backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-admin}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-aifficient}
+      REDIS_URL: redis://redis:6379/0
+      LIVEKIT_URL: ws://livekit:7880
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      livekit:
+        condition: service_started
+    ports:
+      - "8000:8000"
+
 volumes:
   aifficient_pgdata:
   aifficient_redisdata:

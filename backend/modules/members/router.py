@@ -9,6 +9,7 @@ from modules.members.schema import (
     CreateMemberInput,
     CreateMemberOut,
     MemberOut,
+    RemoveMemberOut,
     ResetPasswordOut,
     UpdateRoleInput,
 )
@@ -56,11 +57,10 @@ def reset_password(
     return MembersService.reset_password(db, tenant, membership_id)
 
 
-@router.delete("/{membership_id}", status_code=204)
+@router.delete("/{membership_id}", response_model=RemoveMemberOut)
 def remove_member(
     membership_id: str,
     db: Session = Depends(get_db),
     tenant=Depends(requires(Role.OWNER, Role.ADMIN)),
 ):
-    MembersService.remove(db, tenant, membership_id)
-    return None
+    return MembersService.remove(db, tenant, membership_id)

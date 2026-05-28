@@ -55,7 +55,7 @@ class AuthService:
 
         user = User(
             full_name=data.full_name,
-            email=data.email,
+            email=data.email.strip().lower(),
             password_hash=hash_password(
                 data.password
             ),
@@ -99,7 +99,7 @@ class AuthService:
 
         user = AuthRepository.get_user(
             db,
-            data.email,
+            data.email.strip().lower(),
         )
 
         if not user:

@@ -1,8 +1,9 @@
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from modules.auth.model import User
+from common.security.roles import Role
 from modules.auth.membership_model import Membership
+from modules.auth.model import User
 
 
 class MembersRepository:
@@ -36,3 +37,19 @@ class MembersRepository:
             .where(Membership.organization_id == organization_id)
         )
         return db.execute(stmt).first()
+
+    @staticmethod
+    def count_owners(db: Session, organization_id: str) -> int:
+        stmt = (
+            select(func.count(Membership.id))
+            .where(Membership.organization_id == organization_id)
+            .where(Membership.role == Role.OWNER)
+        )
+        return db.execute(stmt).scalar_one()
+
+    @staticmethod
+    def count_user_memberships(db: Session, user_id) -> int:
+        stmt = select(func.count(Membership.id)).where(
+            Membership.user_id == user_id
+        )
+        return db.execute(stmt).scalar_one()

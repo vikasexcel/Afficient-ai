@@ -45,6 +45,7 @@ export default function MembersCard() {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<Member | null>(null);
   const [tempPassword, setTempPassword] = useState<string | null>(null);
+  const [resetTarget, setResetTarget] = useState<Member | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -79,6 +80,10 @@ export default function MembersCard() {
     try {
       const res = await resetMemberPassword(m.membership_id);
       setTempPassword(res.temp_password);
+      setResetTarget(m);
+      if (res.email_sent) {
+        toast.success(`New password emailed to ${m.email}`);
+      }
       load();
     } catch (err: any) {
       toast.error(err?.response?.data?.detail ?? "Failed to reset password");
@@ -88,11 +93,17 @@ export default function MembersCard() {
   async function confirmRemove() {
     if (!removeTarget) return;
     try {
-      await removeMember(removeTarget.membership_id);
+      const res = await removeMember(removeTarget.membership_id);
       setMembers((prev) =>
         prev.filter((x) => x.membership_id !== removeTarget.membership_id)
       );
-      toast.success(`${removeTarget.full_name} removed`);
+      if (res.email_sent) {
+        toast.success(
+          `${removeTarget.full_name} removed. We've notified ${removeTarget.email}.`
+        );
+      } else {
+        toast.success(`${removeTarget.full_name} removed`);
+      }
     } catch (err: any) {
       toast.error(err?.response?.data?.detail ?? "Failed to remove member");
     } finally {
@@ -128,6 +139,7 @@ export default function MembersCard() {
           members={members}
           loading={loading}
           canManage={canManage}
+          currentRole={(me?.role as Role | undefined) ?? null}
           currentMembershipId={me?.membership_id ?? null}
           onChangeRole={handleChangeRole}
           onResetPassword={handleResetPassword}
@@ -171,7 +183,12 @@ export default function MembersCard() {
 
       <Dialog
         open={!!tempPassword}
-        onOpenChange={(v) => !v && setTempPassword(null)}
+        onOpenChange={(v) => {
+          if (!v) {
+            setTempPassword(null);
+            setResetTarget(null);
+          }
+        }}
       >
         <DialogContent className="bg-[#0f0f12] border-white/[0.08] sm:max-w-[440px]">
           <DialogHeader>
@@ -179,8 +196,10 @@ export default function MembersCard() {
               Password reset
             </DialogTitle>
             <DialogDescription className="text-[12px] text-white/40">
-              Share this temporary password with the member. It won't be shown
-              again.
+              {resetTarget
+                ? `We've emailed the new password to ${resetTarget.email}.`
+                : "Share this temporary password with the member."}{" "}
+              It won't be shown again.
             </DialogDescription>
           </DialogHeader>
 
@@ -205,7 +224,10 @@ export default function MembersCard() {
 
           <DialogFooter>
             <Button
-              onClick={() => setTempPassword(null)}
+              onClick={() => {
+                setTempPassword(null);
+                setResetTarget(null);
+              }}
               className="bg-violet-600 hover:bg-violet-500"
             >
               Done

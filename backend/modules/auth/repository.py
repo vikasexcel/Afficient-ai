@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session as DBSession
 
 from modules.auth.model import User
@@ -30,7 +30,8 @@ class AuthRepository:
 
     @staticmethod
     def get_user(db: DBSession, email: str):
-        stmt = select(User).where(User.email == email)
+        normalized = (email or "").strip().lower()
+        stmt = select(User).where(func.lower(User.email) == normalized)
         return db.execute(stmt).scalar_one_or_none()
 
     @staticmethod

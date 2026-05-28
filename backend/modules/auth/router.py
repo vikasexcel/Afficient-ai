@@ -1,6 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.orm import Session
+
+from common.security.roles import Role
+from common.security.status import MembershipStatus
 
 from database.dependencies import get_db
 from modules.auth.schema import RegisterInput
@@ -68,10 +71,23 @@ async def me(
     if not user:
         raise HTTPException(404, "User not found")
 
+    role_rank = case(
+        (Membership.role == Role.OWNER, 0),
+        (Membership.role == Role.ADMIN, 1),
+        (Membership.role == Role.AGENT, 2),
+        (Membership.role == Role.MEMBER, 3),
+        else_=99,
+    )
+    status_rank = case(
+        (Membership.status == MembershipStatus.ACTIVE, 0),
+        else_=1,
+    )
     row = db.execute(
         select(Membership, Organization)
         .join(Organization, Organization.id == Membership.organization_id)
         .where(Membership.user_id == user.id)
+        .order_by(status_rank, role_rank, Membership.created_at.desc())
+        .limit(1)
     ).first()
 
     membership = row[0] if row else None
