@@ -12,9 +12,12 @@ Current state of features (as observed in code):
 
 - Auth, multi-tenant orgs, role-based members — **implemented end-to-end**.
 - LiveKit room/token/session management — **implemented end-to-end**.
-- ElevenLabs TTS streaming into LiveKit rooms — **implemented (backend)**.
-- Campaigns / workflows / executions — **scaffolded** (basic CRUD + a stub AI provider).
-- Frontend Leads, Analytics, Transcripts pages — **UI only with mock data**, no backend wiring yet.
+- **ElevenLabs TTS** streaming into LiveKit rooms — **implemented end-to-end** (backend + smoke tested).
+- **Deepgram STT** subscribing to a LiveKit room and emitting transcript events — **implemented end-to-end** (backend + smoke endpoint + frontend debug UI).
+- **OpenAI GPT-4o conversation engine** — **implemented end-to-end** with Redis-backed conversation memory, BANT/MEDDICC qualification, Postgres-persisted transcripts and call summaries. Wired into the frontend Calls page (assistant panel) and Transcripts page (real DB data).
+- **ConversationOrchestrator** wiring STT → GPT-4o → TTS with barge-in — implemented (backend) and exercisable via `scripts/run_ai_agent.py`.
+- Campaigns / workflows / executions — **scaffolded** (basic CRUD; the `campaign` worker still calls the legacy `AIService.execute` shim, which now delegates to GPT-4o via `modules/ai/provider.py`).
+- Frontend **Calls** and **Transcripts** pages — **wired to the live backend** (GPT-4o chat, Deepgram transcribe smoke, real transcripts + summaries). **Leads** and **Analytics** pages remain UI-only with mock data.
 
 ---
 
@@ -34,6 +37,8 @@ Current state of features (as observed in code):
 - **structlog** — structured logging
 - **livekit / livekit-api** — LiveKit server SDK
 - **elevenlabs** — TTS SDK
+- **openai** (`>=1.51,<2`) — official OpenAI Python SDK (GPT-4o)
+- **deepgram-sdk** (`7.2.0`) — Deepgram Speech-to-Text SDK (nova-3)
 - **celery / kombu** — listed in `requirements.txt` (no worker code found yet; likely planned)
 - **prometheus-fastapi-instrumentator / prometheus_client** — present in requirements (not wired into `main.py`)
 - **smtplib** (stdlib) — SMTP email delivery
@@ -90,10 +95,11 @@ afficient-ai/
 │   │   └── models.py               (aggregator)
 │   │
 │   ├── migrations/                 Alembic
-│   │   └── versions/               12 revisions: init -> users/orgs -> sessions ->
+│   │   └── versions/               13 revisions: init -> users/orgs -> sessions ->
 │   │                               memberships -> audit_logs -> role enum -> campaigns ->
 │   │                               workflows -> executions -> exec output -> membership
-│   │                               status -> livekit_sessions
+│   │                               status -> livekit_sessions -> ai_tables
+│   │                               (ai_calls, ai_transcript_entries, ai_call_summaries)
 │   │
 │   ├── common/
 │   │   ├── security/
@@ -132,24 +138,48 @@ afficient-ai/
 │   │   │   ├── workflow_model.py   Workflow
 │   │   │   ├── execution_model.py  Execution
 │   │   │   └── worker.py           in-process executor (calls AIService.execute)
-│   │   ├── ai/
-│   │   │   ├── service.py          AIService.execute(prompt)
-│   │   │   └── provider.py         AIProvider.generate — **stub** returning a string
+│   │   ├── ai/                     GPT-4o conversation engine
+│   │   │   ├── router.py           /ai/generate, /ai/converse, /ai/calls/*, /ai/personas
+│   │   │   ├── service.py          AIService: start_call, respond_turn, stream_turn,
+│   │   │   │                       get_qualification, get_transcript, finalize_call
+│   │   │   ├── openai_client.py    Async OpenAI SDK wrapper (complete + stream)
+│   │   │   ├── memory.py           Redis-backed ConversationMemory (history+meta+qual)
+│   │   │   ├── qualification.py    Rule-based BANT/MEDDICC state machine
+│   │   │   ├── prompts.py          Persona system prompts (outbound_sdr, appointment_setter, support_triage)
+│   │   │   ├── orchestrator.py     Live STT→GPT-4o→TTS loop with barge-in (LiveKit)
+│   │   │   ├── provider.py         Backward-compatible shim → OpenAIClient
+│   │   │   ├── repository.py       Sync CRUD for AICall / AITranscriptEntry / AICallSummary
+│   │   │   ├── model.py            SQLAlchemy models (org-scoped)
+│   │   │   ├── schema.py           pydantic request/response + CallListEntry
+│   │   │   ├── dependencies.py     Singletons (openai/memory/service) + AIError→HTTPException
+│   │   │   └── exceptions.py       AIError hierarchy with HTTP status codes
 │   │   ├── livekit/                rooms, tokens, sessions
 │   │   │   ├── router.py
 │   │   │   ├── service.py          LiveKitService (async wrapper around livekit.api)
 │   │   │   ├── transport.py        AudioTransport (publish PCM into a room)
 │   │   │   ├── repository.py / schema.py / dependencies.py / exceptions.py
 │   │   │   └── model.py            LiveKitSession
-│   │   └── tts/
-│   │       ├── router.py           POST /tts/speak, GET /tts/voices
-│   │       ├── streamer.py         TTSStreamer: ElevenLabs → LiveKit room
-│   │       ├── elevenlabs_client.py
-│   │       ├── schema.py / dependencies.py / exceptions.py
+│   │   ├── tts/
+│   │   │   ├── router.py           POST /tts/speak, GET /tts/voices
+│   │   │   ├── streamer.py         TTSStreamer: ElevenLabs → LiveKit room
+│   │   │   ├── elevenlabs_client.py
+│   │   │   └── schema.py / dependencies.py / exceptions.py
+│   │   └── stt/                    Deepgram speech-to-text
+│   │       ├── router.py           POST /stt/transcribe (smoke/debug endpoint)
+│   │       ├── streamer.py         STTSession: LiveKit audio → Deepgram → TranscriptEvent
+│   │       ├── deepgram_client.py  Async websocket wrapper, normalises events
+│   │       └── schema.py / dependencies.py / exceptions.py
 │   │
 │   └── scripts/
-│       ├── e2e_livekit_test.py     end-to-end smoke test
-│       └── e2e_tts_test.py         end-to-end TTS smoke test
+│       ├── e2e_livekit_test.py     LiveKit smoke
+│       ├── e2e_full_validation.py  13-point LiveKit validation (rooms, tokens, WebRTC, audio, errors)
+│       ├── e2e_tts_test.py         ElevenLabs → LiveKit smoke
+│       ├── e2e_stt_test.py         LiveKit → Deepgram smoke
+│       ├── e2e_ai_test.py          GPT-4o E2E: generate, converse, qualification, transcript, finalize
+│       ├── run_ai_agent.py         Standalone runner for ConversationOrchestrator (live voice)
+│       ├── demo_barge_in.py        Interactive TTS barge-in demo
+│       ├── debug_stt_capture.py / debug_stt_tap.py    Deepgram debugging utilities
+│       └── bench_tts_http.py / bench_tts_inproc.py    TTS latency benchmarks
 │
 └── frontend/
     ├── package.json
@@ -172,10 +202,10 @@ afficient-ai/
         │   ├── Signup.tsx          signup form
         │   ├── Dashboard.tsx       dashboard (mostly placeholder)
         │   ├── Campaigns.tsx       campaign list/CTA
-        │   ├── Calls.tsx           LiveKit join room + live participants UI
+        │   ├── Calls.tsx           LiveKit join + GPT-4o assistant panel + Deepgram live transcribe
         │   ├── Leads.tsx           **mock data**, no backend
         │   ├── Analytics.tsx       **mock data**, no backend
-        │   ├── Transcripts.tsx     **mock data**, no backend
+        │   ├── Transcripts.tsx     real data from /ai/calls + per-call transcript/summary
         │   └── Settings.tsx        Tabs: Members / Organization / Profile / Appearance / Security
         │
         ├── components/
@@ -191,12 +221,16 @@ afficient-ai/
         │   ├── members.ts
         │   ├── organization.ts
         │   ├── campaign.ts
-        │   └── livekit.ts
+        │   ├── livekit.ts
+        │   ├── ai.ts               GPT-4o: generate, converse, listCalls, getTranscript,
+        │   │                       getQualification, finalizeCall, listPersonas
+        │   └── stt.ts              Deepgram: transcribe (smoke endpoint)
         │
         ├── store/                  Zustand stores
         │   ├── auth.ts             token + refreshToken (persisted in localStorage)
         │   ├── me.ts               current user profile + role/org + RBAC helpers
         │   ├── livekit.ts          Room + participants + connect/disconnect/toggleMic
+        │   ├── ai.ts               conversation state (bubbles, qualification, summary, send/finalize)
         │   └── appearance.ts       density preference (comfortable / compact)
         │
         ├── lib/
@@ -219,9 +253,10 @@ afficient-ai/
 | `organization` | Read/rename/transfer-ownership/delete current tenant | `modules/organization/router.py` |
 | `members` | Org membership CRUD + temp-password reset + invitation email | `modules/members/*` |
 | `campaign` | Campaign → Workflow → Execution chain; stub in-process execution | `modules/campaign/*` |
-| `ai` | Pluggable AI provider (currently a stub returning a string) | `modules/ai/*` |
+| `ai` | GPT-4o conversation engine: stateless `generate`, stateful `converse`, Redis memory, BANT/MEDDICC qualification, Postgres transcripts/summaries, live STT→LLM→TTS orchestrator | `modules/ai/*` |
 | `livekit` | Create/list/get/delete LiveKit rooms, mint JWT tokens, store local session rows | `modules/livekit/*` |
 | `tts` | List voices, speak text into a LiveKit room via ElevenLabs PCM stream | `modules/tts/*` |
+| `stt` | Subscribe to a LiveKit room as an agent, pipe audio into Deepgram, return TranscriptEvents | `modules/stt/*` |
 | `health` | `/health` smoke check | `modules/health/router.py` |
 
 ### Cross-cutting
@@ -241,10 +276,10 @@ afficient-ai/
 | Login / Signup | wired to `/auth/login` and `/auth/register` | uses react-hook-form |
 | Dashboard | placeholder | `pages/Dashboard.tsx` |
 | Campaigns | minimal CRUD UI, dialog for create | `pages/Campaigns.tsx`, `services/campaign.ts` |
-| Calls | full LiveKit join/disconnect, participant tiles, mic toggle | `pages/Calls.tsx`, `store/livekit.ts` |
+| Calls | LiveKit join/disconnect, mic toggle, persona picker, GPT-4o assistant panel (live converse + BANT chips + Finalize summary), Deepgram "Live transcribe" smoke widget | `pages/Calls.tsx`, `store/livekit.ts`, `store/ai.ts`, `services/ai.ts`, `services/stt.ts` |
 | Leads | **mock data only** | `pages/Leads.tsx` |
 | Analytics | **mock data only** | `pages/Analytics.tsx` |
-| Transcripts | **mock data only** | `pages/Transcripts.tsx` |
+| Transcripts | Real calls from `GET /ai/calls`, per-call transcript from `GET /ai/calls/{id}/transcript`, summary + qualification, finalize + export JSON | `pages/Transcripts.tsx`, `services/ai.ts` |
 | Settings | tabs: Members, Organization, Profile, Appearance, Security | gated by role via `store/me.ts` helpers |
 
 ---
@@ -285,6 +320,8 @@ Backend routes are mounted under `settings.API_PREFIX` (default `/api/v1`):
 | `/campaigns` | campaign | `POST /`, `POST /activate`, `POST /execute/{workflow_id}`, `GET /executions/{id}` |
 | `/livekit` | livekit | `POST /rooms`, `GET /rooms`, `GET /rooms/{name}`, `DELETE /rooms/{name}`, `POST /tokens`, `GET /sessions/{room_name}` |
 | `/tts` | tts | `GET /voices`, `POST /speak` |
+| `/stt` | stt | `POST /transcribe` (joins a LiveKit room as a Deepgram subscriber for N seconds, returns events) |
+| `/ai` | ai | `POST /generate` (stateless), `POST /converse` (stateful turn), `GET /calls`, `GET /calls/{id}/transcript`, `GET /calls/{id}/qualification`, `POST /calls/{id}/finalize`, `GET /personas` |
 
 ---
 
@@ -297,6 +334,7 @@ Zustand is used throughout the frontend. There is **no Redux, Context, or React 
 | `useAuth` (`store/auth.ts`) | `token`, `refreshToken`, `setAuth`, `logout`, `hydrate` | `localStorage` keys `token`, `refresh_token` |
 | `useMe` (`store/me.ts`) | Current user from `GET /auth/me`; exposes role helpers (`canManageMembers`, `canUseCampaigns`, `canAccessWorkspace`, `canAccessInsights`, `isOwner`) | in-memory only; refetched on token change |
 | `useLiveKit` (`store/livekit.ts`) | Live `Room` instance + participants + mic state | in-memory only |
+| `useAI` (`store/ai.ts`) | Active call_id, persona, framework, chat bubbles, qualification snapshot, summary. Actions: `start`, `send` (→ `/ai/converse`), `finalize`, `refreshQualification`, `loadTranscript`, `reset` | in-memory only |
 | `useAppearance` (`store/appearance.ts`) | UI density (`comfortable`/`compact`); writes `data-density` attribute on `<html>` | `localStorage` key `afficient-density` |
 
 Bootstrapping (`App.tsx`):
@@ -321,7 +359,7 @@ const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8001/api/v1";
 export const api = axios.create({ baseURL: API_BASE, ... });
 ```
 
-Other service modules (`services/members.ts`, `services/organization.ts`, `services/campaign.ts`, `services/livekit.ts`) import and reuse `api`. Each exports typed wrappers around endpoints (e.g. `listMembers()`, `createRoom()`, `issueToken()`).
+Other service modules (`services/members.ts`, `services/organization.ts`, `services/campaign.ts`, `services/livekit.ts`, `services/ai.ts`, `services/stt.ts`) import and reuse `api`. Each exports typed wrappers around endpoints (e.g. `listMembers()`, `createRoom()`, `issueToken()`, `converse()`, `listCalls()`, `transcribe()`).
 
 #### Interceptor (`lib/interceptor.ts`)
 
@@ -528,6 +566,41 @@ If SMTP isn't fully configured, `mailer.py` logs a warning and skips sending —
 | `ELEVENLABS_AGENT_IDENTITY` | `ai-agent` |
 | `ELEVENLABS_AGENT_NAME` | `AI Agent` |
 
+### Deepgram STT
+
+| Var | Default |
+|---|---|
+| `DEEPGRAM_API_KEY` | `""` |
+| `DEEPGRAM_MODEL` | `nova-3` |
+| `DEEPGRAM_LANGUAGE` | `en` |
+| `DEEPGRAM_INTERIM_RESULTS` | `true` |
+| `DEEPGRAM_VAD_EVENTS` | `true` |
+| `DEEPGRAM_ENDPOINTING_MS` | `300` |
+| `DEEPGRAM_UTTERANCE_END_MS` | `1000` |
+| `DEEPGRAM_SMART_FORMAT` | `true` |
+| `DEEPGRAM_PUNCTUATE` | `true` |
+| `DEEPGRAM_STT_AGENT_IDENTITY` | `ai-stt-agent` |
+| `DEEPGRAM_STT_AGENT_NAME` | `AI STT Agent` |
+
+### OpenAI / GPT-4o conversation engine
+
+| Var | Default | Purpose |
+|---|---|---|
+| `OPENAI_API_KEY` | `""` | Required for `/ai/*` endpoints to actually call OpenAI |
+| `OPENAI_BASE_URL` | `None` | Optional override (Azure / proxy) |
+| `OPENAI_ORG_ID` | `None` | Optional org header |
+| `OPENAI_MODEL` | `gpt-4o` | Default chat model |
+| `OPENAI_TEMPERATURE` | `0.4` | |
+| `OPENAI_MAX_TOKENS` | `320` | Per-turn cap |
+| `OPENAI_TIMEOUT_SECONDS` | `30.0` | Per-request timeout |
+| `OPENAI_MAX_RETRIES` | `2` | SDK retry count |
+| `AI_MEMORY_TTL_SECONDS` | `21600` (6h) | Redis TTL for conversation memory |
+| `AI_MEMORY_MAX_TURNS` | `24` | Rolling history window (user+assistant pairs) |
+| `AI_QUALIFICATION_FRAMEWORK` | `BANT` | `BANT` or `MEDDICC` |
+| `AI_DEFAULT_PERSONA` | `outbound_sdr` | Built-ins: `outbound_sdr`, `appointment_setter`, `support_triage` |
+
+> When `OPENAI_API_KEY` is missing, the AI singletons raise `AIConfigError` on first use and the FastAPI dependency translates it to a clean HTTP 500 with `detail = "OPENAI_API_KEY is not set"`. The app still boots; only `/ai/*` endpoints fail.
+
 ### Logging
 
 | Var | Default | Purpose |
@@ -541,7 +614,7 @@ If SMTP isn't fully configured, `mailer.py` logs a warning and skips sending —
 |---|---|---|
 | `VITE_API_URL` | `http://localhost:8001/api/v1` (in `services/auth.ts`) | Backend base URL |
 
-> Note: the backend Dockerfile exposes port **8000**, but the frontend dev default points at **8001**. Reconcile per environment (use a reverse proxy, or override `VITE_API_URL`).
+> Note: the backend Dockerfile exposes port **8000**, the dev convention has shifted between **8001** and **8002** depending on which uvicorn the developer launches, and the frontend dev server typically runs on **20197** (Vite finds the next free port if it's taken). Reconcile per environment by setting `VITE_API_URL` in `frontend/.env` to match the actual backend port. The CORS allowlist in `main.py` already includes `http://localhost:20197`.
 
 ---
 
@@ -610,11 +683,19 @@ npm run preview      # serve ./dist locally for sanity check
 
 ```bash
 cd backend
-python scripts/e2e_livekit_test.py
-python scripts/e2e_tts_test.py
+source venv/bin/activate
+
+python scripts/e2e_livekit_test.py        # LiveKit rooms/tokens/WebRTC
+python scripts/e2e_full_validation.py     # 13-point LiveKit validation (audio, multi-participant, errors)
+python scripts/e2e_tts_test.py            # ElevenLabs → LiveKit
+python scripts/e2e_stt_test.py            # LiveKit → Deepgram
+python scripts/e2e_ai_test.py             # GPT-4o: generate, converse, qualification, transcript, finalize
+
+# Live voice agent (joins a real LiveKit room and runs STT→GPT-4o→TTS with barge-in)
+python scripts/run_ai_agent.py --room my-test-room
 ```
 
-These exercise the full auth → LiveKit / TTS pipeline against a running backend.
+These exercise the full auth → LiveKit / TTS / STT / GPT-4o pipeline against a running backend. `e2e_ai_test.py` requires `OPENAI_API_KEY` in `backend/.env`. Set `E2E_BASE_URL=http://127.0.0.1:8001` (or 8002) if your backend is not on the script's default.
 
 ### F. Deployment
 
@@ -630,12 +711,14 @@ See `docs/DEPLOY_AWS.md` for a step-by-step AWS guide (S3+CloudFront, App Runner
 4. **Multi-tenant via Memberships.** A user can belong to multiple orgs; `get_current_tenant` always picks the best one. RBAC roles: `owner`, `admin`, `agent`, `member`.
 5. **LiveKit as the realtime transport.** Backend mints scoped JWTs per participant; the frontend joins via `livekit-client`. Local `livekit_sessions` table mirrors LiveKit state for attribution/observability.
 6. **ElevenLabs streamed into LiveKit.** Backend joins a room as a hidden agent participant and pushes PCM frames — no audio storage required (see `modules/tts/streamer.py`).
-7. **Zustand over Redux/Context.** Small bespoke stores per concern; localStorage only for things that must survive reload (auth tokens, theme, density).
-8. **Single axios instance.** All service modules share it; the interceptor centralizes auth, refresh, and 401 handling.
-9. **Theme via next-themes + Tailwind v4 tokens.** A light-mode safety net in `index.css` lets legacy dark-only utility classes degrade gracefully in light mode without rewriting every component.
-10. **Alembic for migrations.** 12 numbered revisions in `backend/migrations/versions/`; the source-of-truth is the ORM models.
-11. **structlog for logs.** Console renderer in dev, JSON renderer in prod / when `LOG_JSON=true`.
-12. **Rate limiting at the edge.** Per-IP Redis sliding window (30 req / 60s) applied as middleware to **all** routes, including health.
+7. **Deepgram subscribed from LiveKit.** Symmetric to TTS: backend joins as a subscribe-only agent, pulls PCM from the target participant, and forwards to Deepgram's streaming WS. Normalised `TranscriptEvent` (speech_started / partial / final / utterance_end) decouples the consumer from provider specifics (see `modules/stt/streamer.py`).
+8. **GPT-4o conversation engine isolated in `modules/ai/`.** Composed of a thin async OpenAI client, a Redis-backed memory layer (history + meta + qualification under one TTL), a rule-based BANT/MEDDICC tracker, a prompt/persona registry, a service that orchestrates them, a synchronous repository that persists turns and summaries to Postgres, and an orchestrator that wires the live STT→LLM→TTS loop with barge-in. All HTTP edges go through `dependencies.py` which converts `AIError` → `HTTPException` so the API surface is predictable.
+9. **Zustand over Redux/Context.** Small bespoke stores per concern; localStorage only for things that must survive reload (auth tokens, theme, density).
+10. **Single axios instance.** All service modules share it; the interceptor centralizes auth, refresh, and 401 handling.
+11. **Theme via next-themes + Tailwind v4 tokens.** A light-mode safety net in `index.css` lets legacy dark-only utility classes degrade gracefully in light mode without rewriting every component.
+12. **Alembic for migrations.** 13 numbered revisions in `backend/migrations/versions/`; the source-of-truth is the ORM models. AI tables (`ai_calls`, `ai_transcript_entries`, `ai_call_summaries`) are FK'd to organizations and (optionally) users so transcripts are tenant-scoped.
+13. **structlog for logs.** Console renderer in dev, JSON renderer in prod / when `LOG_JSON=true`. AI module emits structured events (`ai.call.started`, `ai.turn.done`, `ai.complete.done`, `ai.stream_collected.done`, `ai.finalize.done`) with latency, token counts, model, qualification score and TTFT for observability.
+14. **Rate limiting at the edge.** Per-IP Redis sliding window (30 req / 60s) applied as middleware to **all** routes, including health.
 
 ---
 
@@ -645,30 +728,40 @@ These are real items found while scanning the repo, not speculation.
 
 ### Backend
 
-- **Secrets committed to `backend/.env`.** ElevenLabs API key, Gmail SMTP app password, JWT secret, and LiveKit dev secret are present in the working tree. Must be rotated before public deployment and removed from history.
-- **CORS allowlist is dev-only** (`main.py` allows only `localhost:5173/5174`). Production frontend origins must be added.
+- **Secrets committed to `backend/.env`.** ElevenLabs API key, Gmail SMTP app password, JWT secret, LiveKit dev secret, **OpenAI API key**, and **Deepgram API key** are present in the working tree. Must be rotated before public deployment and removed from history.
+- **CORS allowlist is dev-only** (`main.py` allows `localhost:5173/5174` plus `localhost:20197`). Production frontend origins must be added.
 - **Rate limit logs to stdout via `print(..., flush=True)`** in `common/security/protection.py`. Should use the structured logger.
-- **Rate limit applies to `/health`.** Health/readiness probes can be throttled.
-- **`get_current_org` (`modules/auth/dependencies.py`) is a stub** that returns `{"organization":"current"}` regardless of the user.
+- **Rate limit applies to `/health`** and to `/ai/*`. Health/readiness probes can be throttled; AI E2E scripts work around this by flushing the Redis `api:*` keys between runs.
+- **`get_current_org` (`modules/auth/dependencies.py`) is a stub** that returns `{"organization":"current"}` regardless of the user. The AI module sidesteps this by reading `organization_id` directly from the tenant dict in its router.
 - **`CampaignService.execute` is defined twice** in `modules/campaign/service.py` — only the second definition (which calls the worker synchronously) is reachable.
 - **`run_execution` (`modules/campaign/worker.py`) runs synchronously inside the request thread** and contains a `print(result)`. No background queue, despite Celery being in `requirements.txt`.
-- **`AIProvider.generate` is a stub** that returns `f"AI generated: {prompt}"` — there is no real LLM integration yet.
 - **`GET /auth/audit`** returns **all** audit logs with no tenant scoping or pagination.
 - **Duplicate `get_db`** helpers in `database/session.py` and `database/dependencies.py`.
 - **`prometheus-fastapi-instrumentator` is in `requirements.txt` but is not registered** in `main.py`.
 - **`celery` is in `requirements.txt` but there are no Celery tasks or worker process.**
 - **JWT uses `datetime.utcnow()`** which is deprecated in Python 3.12; should migrate to `datetime.now(timezone.utc)`.
 - **`backend/next-app/`** appears unused (no source, only config files).
+- **`/ai/generate` and `/ai/converse` do not stream responses to the HTTP client** even though the underlying `OpenAIClient` supports streaming (`stream_collected`). The orchestrator uses streaming internally for TTFT, but the public REST endpoints buffer the full reply. Add SSE/chunked endpoints if the frontend wants token-by-token rendering.
+- **No automated tests for `ConversationOrchestrator`.** It is exercised manually via `scripts/run_ai_agent.py`; barge-in correctness is not regression-protected.
 
 ### Frontend
 
 - **`Login.tsx`, `Signup.tsx`, `Dashboard.tsx`, `Calls.tsx` and others contain large commented-out legacy code blocks.** Pure clutter; safe to delete.
-- **`VITE_API_URL` default** in `services/auth.ts` points at `http://localhost:8001/api/v1`, but the Docker backend listens on `8000`. Set explicitly per environment.
-- **`Leads`, `Analytics`, `Transcripts` pages use mock data only.** No services or stores yet.
+- **`VITE_API_URL` default** in `services/auth.ts` points at `http://localhost:8001/api/v1`, but the backend may run on 8000 (Docker), 8001, or 8002 depending on dev workflow. The current Vite dev port is 20197. Always set `VITE_API_URL` in `frontend/.env` to match.
+- **`Leads` and `Analytics` pages still use mock data only.** No services or stores yet. (Transcripts and Calls are now real.)
 - **`useAuth` does not persist via Zustand's `persist` middleware** — it reads/writes localStorage manually. Works, but slightly inconsistent with `useAppearance` which uses the same pattern.
 - **No global error boundary.** Unhandled render errors will white-screen the SPA.
 - **Bundle size warning at build time** (~1.1 MB JS, ~320 KB gzipped). Consider route-level code splitting via `React.lazy` once pages have real backend wiring.
 - **`AuthTokens` shape** assumes `{ access_token, refresh_token }` — backend's `/auth/refresh` returns only `{ access_token }`, which the interceptor correctly handles. Documenting here so future changes don't break refresh.
+- **Pre-existing TypeScript errors** in `components/campaign/CreateCampaignDialog.tsx` (unknown `prompt_template` field) and `pages/Dashboard.tsx` (unused `i`). Not introduced by recent AI/STT work but block a clean `tsc -b` until fixed.
+- **`tsconfig.app.json` uses `baseUrl`** which is deprecated in TypeScript 6+ and produces a fatal `TS5101` unless `--ignoreDeprecations 6.0` is passed. Migrate to `paths`-only configuration.
+- **Node 20.18.2 in the dev environment** is below Vite 8's recommended `20.19+ / 22.12+` — Vite still runs but prints a warning at startup.
+
+### Resolved (kept for trace, do not re-open without re-checking)
+
+- ~~`AIProvider.generate` is a stub.~~ Replaced; `modules/ai/provider.py` now delegates to `OpenAIClient.agenerate`. The legacy `AIService.execute(prompt)` shim is preserved for the campaign worker.
+- ~~No real LLM integration.~~ Full GPT-4o engine landed: `/ai/generate`, `/ai/converse`, BANT/MEDDICC qualification, Redis memory, Postgres transcripts and summaries, live orchestrator.
+- ~~Transcripts page uses mock data only.~~ Now backed by `GET /ai/calls` + `GET /ai/calls/{id}/transcript`.
 
 ---
 
@@ -708,4 +801,4 @@ If something is genuinely unclear from reading the code, write **"Not clearly de
 
 ---
 
-*Last full review: based on the repository state as of the commit at which this file was written. Re-scan whenever you suspect drift.*
+*Last full review: 2026-05-29 — covers the addition of the Deepgram STT module, the OpenAI GPT-4o conversation engine (`modules/ai/`), the AI tables migration, the new `/ai/*` and `/stt/*` endpoints, the frontend `services/ai.ts`, `services/stt.ts`, `store/ai.ts`, and the rewritten Calls + Transcripts pages. Re-scan whenever you suspect drift.*

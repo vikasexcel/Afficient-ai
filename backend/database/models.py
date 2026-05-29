@@ -6,3 +6,5 @@ from modules.campaign.model import Campaign
 from modules.campaign.workflow_model import Workflow
 from modules.campaign.execution_model import Execution
 from modules.livekit.model import LiveKitSession
+from modules.ai.model import AICall, AITranscriptEntry, AICallSummary
+from modules.telephony.model import TelephonyCall, TelephonyEvent

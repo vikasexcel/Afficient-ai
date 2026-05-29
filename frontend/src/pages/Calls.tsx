@@ -1,11 +1,38 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Mic, MicOff, PhoneOff, Radio, User } from "lucide-react";
+import {
+  Bot,
+  CheckCircle2,
+  FileText,
+  Loader2,
+  Mic,
+  MicOff,
+  Phone,
+  PhoneCall,
+  PhoneOff,
+  Radio,
+  RefreshCw,
+  Send,
+  Sparkles,
+  User,
+  Waves,
+  X,
+} from "lucide-react";
 
 import AppLayout from "@/components/layout/AppLayout";
 import { Button } from "@/components/ui/button";
 import { useMe } from "@/store/me";
 import { useLiveKit, type ParticipantInfo } from "@/store/livekit";
+import { useAI, type ChatBubble } from "@/store/ai";
+import { transcribe, type TranscriptEvent } from "@/services/stt";
+import { listPersonas, type Persona } from "@/services/ai";
+import {
+  cancelCall,
+  initiateCall,
+  listCalls,
+  retryCall,
+  type TelephonyCall,
+} from "@/services/telephony";
 
 function defaultRoomName(): string {
   const date = new Date();
@@ -30,14 +57,28 @@ export default function Calls() {
     toggleMic,
   } = useLiveKit();
 
+  const aiStart = useAI((s) => s.start);
+  const aiReset = useAI((s) => s.reset);
+
   const [draftRoom, setDraftRoom] = useState<string>(defaultRoomName());
+  const [persona, setPersona] = useState<string>("outbound_sdr");
+  const [personas, setPersonas] = useState<Persona[]>([]);
+  const [mode, setMode] = useState<"browser" | "phone">("browser");
+
+  useEffect(() => {
+    listPersonas()
+      .then(setPersonas)
+      .catch(() => {
+        // optional — falls back to the default persona without UI noise.
+      });
+  }, []);
 
   useEffect(() => {
     return () => {
-      // If the page unmounts while connected, clean up.
       if (useLiveKit.getState().status === "connected") {
         useLiveKit.getState().disconnect();
       }
+      useAI.getState().reset();
     };
   }, []);
 
@@ -61,6 +102,7 @@ export default function Calls() {
         identity,
         displayName: me?.full_name || identity,
       });
+      aiStart({ callId: name, persona, framework: "BANT" });
       toast.success(`Joined ${name}`);
     } catch (err) {
       const message =
@@ -71,13 +113,14 @@ export default function Calls() {
 
   async function handleLeave() {
     await disconnect();
+    aiReset();
     toast.message("Left the call");
     setDraftRoom(defaultRoomName());
   }
 
   return (
     <AppLayout>
-      <div className="max-w-3xl space-y-6">
+      <div className="max-w-6xl space-y-6">
         <div>
           <h1
             className="text-[22px] font-semibold text-white"
@@ -86,32 +129,78 @@ export default function Calls() {
             Calls
           </h1>
           <p className="text-[13px] text-white/35 mt-0.5">
-            Audio rooms powered by LiveKit
+            LiveKit audio rooms · GPT-4o assistant · Deepgram transcription ·
+            Twilio outbound dialer
           </p>
         </div>
 
-        {!isConnected ? (
-          <JoinForm
-            roomName={draftRoom}
-            onChange={setDraftRoom}
-            onJoin={handleJoin}
-            disabled={isConnecting}
-            connecting={isConnecting}
-            error={error}
-          />
+        {/* Mode tabs: browser-test room vs. real PSTN dialer */}
+        <div className="inline-flex rounded-[10px] border border-white/[0.07] bg-white/[0.02] p-1">
+          <button
+            type="button"
+            onClick={() => setMode("browser")}
+            className={`px-3 py-1.5 text-[12px] font-medium rounded-[7px] transition-colors ${
+              mode === "browser"
+                ? "bg-white/[0.08] text-white"
+                : "text-white/50 hover:text-white/80"
+            }`}
+          >
+            Browser test room
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("phone")}
+            className={`px-3 py-1.5 text-[12px] font-medium rounded-[7px] transition-colors flex items-center gap-1.5 ${
+              mode === "phone"
+                ? "bg-white/[0.08] text-white"
+                : "text-white/50 hover:text-white/80"
+            }`}
+          >
+            <Phone size={12} />
+            Phone dialer
+          </button>
+        </div>
+
+        {mode === "browser" ? (
+          !isConnected ? (
+            <JoinForm
+              roomName={draftRoom}
+              onChange={setDraftRoom}
+              onJoin={handleJoin}
+              disabled={isConnecting}
+              connecting={isConnecting}
+              error={error}
+              persona={persona}
+              onPersonaChange={setPersona}
+              personas={personas}
+            />
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-5 items-start">
+              <LiveRoom
+                roomName={roomName ?? ""}
+                participants={participants}
+                micEnabled={micEnabled}
+                onToggleMic={() => toggleMic()}
+                onLeave={handleLeave}
+              />
+              <AIAssistantPanel />
+            </div>
+          )
         ) : (
-          <LiveRoom
-            roomName={roomName ?? ""}
-            participants={participants}
-            micEnabled={micEnabled}
-            onToggleMic={() => toggleMic()}
-            onLeave={handleLeave}
+          <PhoneDialerSection
+            personas={personas}
+            defaultPersona={persona}
+            onPersonaChange={setPersona}
           />
         )}
       </div>
     </AppLayout>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Join form
+// ---------------------------------------------------------------------------
 
 function JoinForm({
   roomName,
@@ -120,6 +209,9 @@ function JoinForm({
   disabled,
   connecting,
   error,
+  persona,
+  onPersonaChange,
+  personas,
 }: {
   roomName: string;
   onChange: (v: string) => void;
@@ -127,9 +219,12 @@ function JoinForm({
   disabled: boolean;
   connecting: boolean;
   error: string | null;
+  persona: string;
+  onPersonaChange: (v: string) => void;
+  personas: Persona[];
 }) {
   return (
-    <div className="bg-white/[0.03] border border-white/[0.07] rounded-[12px] p-6">
+    <div className="bg-white/[0.03] border border-white/[0.07] rounded-[12px] p-6 max-w-2xl">
       <label className="block text-[11px] font-medium text-white/40 tracking-wide mb-2">
         Room name
       </label>
@@ -139,6 +234,25 @@ function JoinForm({
         placeholder="call-2026-05-28"
         className="w-full bg-white/[0.04] border border-white/[0.09] focus:border-violet-500/50 focus:ring-2 focus:ring-violet-500/10 rounded-[8px] px-3 py-2.5 text-[13px] text-white placeholder-white/20 outline-none transition-all"
       />
+
+      <label className="block text-[11px] font-medium text-white/40 tracking-wide mt-5 mb-2">
+        AI persona
+      </label>
+      <select
+        value={persona}
+        onChange={(e) => onPersonaChange(e.target.value)}
+        className="w-full bg-white/[0.04] border border-white/[0.09] focus:border-violet-500/50 focus:ring-2 focus:ring-violet-500/10 rounded-[8px] px-3 py-2.5 text-[13px] text-white outline-none transition-all"
+      >
+        {personas.length === 0 ? (
+          <option value="outbound_sdr">Outbound SDR (default)</option>
+        ) : (
+          personas.map((p) => (
+            <option key={p.name} value={p.name}>
+              {p.name.replace(/_/g, " ")} — {p.description}
+            </option>
+          ))
+        )}
+      </select>
 
       {error && (
         <div className="mt-4 px-3 py-2.5 rounded-[8px] bg-red-500/8 border border-red-500/20 text-[12px] text-red-400">
@@ -155,12 +269,18 @@ function JoinForm({
       </Button>
 
       <p className="text-[11px] text-white/30 mt-4 leading-relaxed">
-        A new room is created on the server if it doesn't exist. Your browser
-        will ask for microphone permission once you join.
+        A new LiveKit room is created if it doesn't exist. Your browser will
+        ask for microphone permission. Once joined, the GPT-4o assistant panel
+        opens — type to converse, or use "Live transcribe" to verify your mic
+        through Deepgram.
       </p>
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// LiveKit room view
+// ---------------------------------------------------------------------------
 
 function LiveRoom({
   roomName,
@@ -188,7 +308,8 @@ function LiveRoom({
                 {roomName}
               </div>
               <div className="text-[11px] text-white/35">
-                {participants.length} participant{participants.length === 1 ? "" : "s"}
+                {participants.length} participant
+                {participants.length === 1 ? "" : "s"}
               </div>
             </div>
           </div>
@@ -215,6 +336,8 @@ function LiveRoom({
           <ParticipantTile key={p.identity} p={p} />
         ))}
       </div>
+
+      <LiveTranscribePanel roomName={roomName} />
     </div>
   );
 }
@@ -251,6 +374,721 @@ function ParticipantTile({ p }: { p: ParticipantInfo }) {
             )}
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Deepgram live-transcribe smoke panel
+// ---------------------------------------------------------------------------
+
+function LiveTranscribePanel({ roomName }: { roomName: string }) {
+  const [running, setRunning] = useState(false);
+  const [duration, setDuration] = useState(10);
+  const [events, setEvents] = useState<TranscriptEvent[]>([]);
+  const [latencyMs, setLatencyMs] = useState<number | null>(null);
+
+  async function handleRun() {
+    setRunning(true);
+    setEvents([]);
+    setLatencyMs(null);
+    try {
+      const result = await transcribe({
+        room: roomName,
+        duration_seconds: duration,
+      });
+      setEvents(result.events);
+      setLatencyMs(result.duration_ms);
+      const finals = result.events.filter((e) => e.kind === "final").length;
+      toast.success(
+        `Deepgram: ${result.events.length} events (${finals} final) in ${result.duration_ms}ms`
+      );
+    } catch (err) {
+      const detail =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data
+          ?.detail || (err as Error)?.message || "Transcribe failed";
+      toast.error(detail);
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  return (
+    <div className="rounded-[12px] border border-white/[0.07] bg-white/[0.02] p-5">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center justify-center w-7 h-7 rounded-[7px] bg-sky-500/15 text-sky-300">
+            <Waves size={13} />
+          </span>
+          <div>
+            <div className="text-[13px] font-medium text-white">
+              Live transcribe
+            </div>
+            <div className="text-[11px] text-white/40">
+              Pipes your mic into Deepgram for a quick STT check
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <select
+            value={duration}
+            onChange={(e) => setDuration(Number(e.target.value))}
+            disabled={running}
+            className="bg-white/[0.04] border border-white/[0.09] rounded-[6px] px-2 py-1 text-[12px] text-white outline-none"
+          >
+            <option value={5}>5s</option>
+            <option value={10}>10s</option>
+            <option value={20}>20s</option>
+            <option value={30}>30s</option>
+          </select>
+          <Button size="sm" disabled={running} onClick={handleRun}>
+            {running ? "Listening…" : "Transcribe"}
+          </Button>
+        </div>
+      </div>
+
+      {events.length > 0 && (
+        <div className="mt-4 space-y-2">
+          <div className="text-[11px] text-white/40">
+            {events.length} events · session {latencyMs}ms
+          </div>
+          <div className="max-h-48 overflow-y-auto rounded-[8px] border border-white/[0.05] bg-black/30 p-3 space-y-1 font-mono">
+            {events.map((e, i) => (
+              <div
+                key={i}
+                className={`text-[11px] ${
+                  e.kind === "final"
+                    ? "text-emerald-300"
+                    : e.kind === "partial"
+                    ? "text-white/55"
+                    : "text-violet-300"
+                }`}
+              >
+                <span className="text-white/30">
+                  {String(e.ts_ms).padStart(5, " ")}ms
+                </span>{" "}
+                <span className="uppercase tracking-wide">{e.kind}</span>
+                {e.text && <span className="text-white/85"> · {e.text}</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// GPT-4o assistant panel
+// ---------------------------------------------------------------------------
+
+function AIAssistantPanel() {
+  const callId = useAI((s) => s.callId);
+  const status = useAI((s) => s.status);
+  const bubbles = useAI((s) => s.bubbles);
+  const error = useAI((s) => s.error);
+  const qualification = useAI((s) => s.qualification);
+  const summary = useAI((s) => s.summary);
+  const send = useAI((s) => s.send);
+  const finalize = useAI((s) => s.finalize);
+
+  const [draft, setDraft] = useState("");
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({
+      top: scrollRef.current.scrollHeight,
+      behavior: "smooth",
+    });
+  }, [bubbles.length, status]);
+
+  async function handleSend() {
+    const trimmed = draft.trim();
+    if (!trimmed || status !== "idle") return;
+    setDraft("");
+    await send(trimmed);
+  }
+
+  async function handleFinalize() {
+    const result = await finalize();
+    if (result) {
+      toast.success("Call finalized — summary generated");
+    }
+  }
+
+  if (!callId) return null;
+
+  return (
+    <div className="rounded-[12px] border border-white/[0.07] bg-white/[0.02] flex flex-col h-[640px] sticky top-4">
+      <div className="px-4 py-3 border-b border-white/[0.05] flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center justify-center w-7 h-7 rounded-[7px] bg-violet-500/15 text-violet-300">
+            <Sparkles size={13} />
+          </span>
+          <div>
+            <div className="text-[13px] font-medium text-white">
+              GPT-4o assistant
+            </div>
+            <div className="text-[11px] text-white/40">call · {callId}</div>
+          </div>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={status !== "idle" || bubbles.length === 0}
+          onClick={handleFinalize}
+          className="border-white/[0.08] bg-white/[0.03] text-white/80 hover:bg-white/[0.06] hover:text-white"
+        >
+          <CheckCircle2 size={13} />
+          {status === "finalizing" ? "Finalizing…" : "Finalize"}
+        </Button>
+      </div>
+
+      {qualification && (
+        <div className="px-4 py-2.5 border-b border-white/[0.05] bg-violet-500/[0.03]">
+          <div className="flex items-center justify-between text-[11px]">
+            <span className="text-white/55">
+              {qualification.framework} · {qualification.status.replace(/_/g, " ")}
+            </span>
+            <span className="text-violet-300 font-medium">
+              {qualification.score}/100
+            </span>
+          </div>
+          {qualification.answered_fields.length > 0 && (
+            <div className="flex flex-wrap gap-1 mt-1.5">
+              {qualification.answered_fields.map((f) => (
+                <span
+                  key={f}
+                  className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300"
+                >
+                  {f}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto p-4 space-y-3"
+      >
+        {bubbles.length === 0 && (
+          <div className="text-center text-[12px] text-white/40 pt-12">
+            <Bot size={20} className="mx-auto mb-2 text-white/30" />
+            Type a message to start the conversation. The assistant tracks BANT
+            qualification across turns.
+          </div>
+        )}
+        {bubbles.map((b) => (
+          <Bubble key={b.id} bubble={b} />
+        ))}
+        {status === "sending" && (
+          <div className="text-[11px] text-white/40 italic px-1">
+            GPT-4o is thinking…
+          </div>
+        )}
+        {error && (
+          <div className="text-[12px] text-red-300 bg-red-500/10 border border-red-500/20 rounded-[8px] px-3 py-2">
+            {error}
+          </div>
+        )}
+        {summary?.summary && (
+          <div className="mt-4 rounded-[10px] border border-violet-500/25 bg-violet-500/[0.06] p-3">
+            <div className="flex items-center gap-1.5 text-[11px] font-medium text-violet-200">
+              <FileText size={11} />
+              Call summary
+            </div>
+            <p className="text-[12px] text-white/85 leading-relaxed mt-2 whitespace-pre-wrap">
+              {summary.summary}
+            </p>
+          </div>
+        )}
+      </div>
+
+      <div className="border-t border-white/[0.05] p-3">
+        <div className="flex gap-2">
+          <input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                handleSend();
+              }
+            }}
+            placeholder="Type a message…"
+            disabled={status !== "idle"}
+            className="flex-1 bg-white/[0.04] border border-white/[0.09] focus:border-violet-500/50 rounded-[8px] px-3 py-2 text-[13px] text-white placeholder-white/30 outline-none disabled:opacity-50"
+          />
+          <Button
+            onClick={handleSend}
+            disabled={status !== "idle" || !draft.trim()}
+            className="bg-violet-600 hover:bg-violet-500 text-white"
+          >
+            <Send size={13} />
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Phone dialer (Twilio PSTN → LiveKit SIP → AI agent)
+// ---------------------------------------------------------------------------
+
+function PhoneDialerSection({
+  personas,
+  defaultPersona,
+  onPersonaChange,
+}: {
+  personas: Persona[];
+  defaultPersona: string;
+  onPersonaChange: (v: string) => void;
+}) {
+  const [calls, setCalls] = useState<TelephonyCall[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [refreshTick, setRefreshTick] = useState(0);
+
+  async function refresh() {
+    setLoading(true);
+    try {
+      const data = await listCalls({ limit: 20 });
+      setCalls(data);
+    } catch (err) {
+      const detail =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data
+          ?.detail || (err as Error)?.message || "Failed to load calls";
+      toast.error(detail);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    refresh();
+  }, [refreshTick]);
+
+  // Poll while any call is in a non-terminal state.
+  useEffect(() => {
+    const inFlight = calls.some(
+      (c) =>
+        c.status === "queued" ||
+        c.status === "initiated" ||
+        c.status === "ringing" ||
+        c.status === "in-progress"
+    );
+    if (!inFlight) return;
+    const id = setInterval(() => setRefreshTick((t) => t + 1), 3000);
+    return () => clearInterval(id);
+  }, [calls]);
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-[420px_1fr] gap-5 items-start">
+      <DialerForm
+        personas={personas}
+        defaultPersona={defaultPersona}
+        onPersonaChange={onPersonaChange}
+        onPlaced={() => setRefreshTick((t) => t + 1)}
+      />
+      <RecentPhoneCalls
+        calls={calls}
+        loading={loading}
+        onRefresh={() => setRefreshTick((t) => t + 1)}
+      />
+    </div>
+  );
+}
+
+function DialerForm({
+  personas,
+  defaultPersona,
+  onPersonaChange,
+  onPlaced,
+}: {
+  personas: Persona[];
+  defaultPersona: string;
+  onPersonaChange: (v: string) => void;
+  onPlaced: () => void;
+}) {
+  const [toNumber, setToNumber] = useState("");
+  const [leadName, setLeadName] = useState("");
+  const [opening, setOpening] = useState(
+    "Hi, this is Alex from Aifficient — got 30 seconds?"
+  );
+  const [persona, setPersona] = useState(defaultPersona);
+  const [framework, setFramework] = useState<"BANT" | "MEDDICC">("BANT");
+  const [dialing, setDialing] = useState(false);
+
+  useEffect(() => {
+    setPersona(defaultPersona);
+  }, [defaultPersona]);
+
+  const validNumber = /^\+[1-9]\d{6,14}$/.test(toNumber.trim());
+
+  async function handleDial() {
+    if (!validNumber) {
+      toast.error("Enter a phone number in E.164 format (e.g. +14155551234)");
+      return;
+    }
+    setDialing(true);
+    try {
+      const call = await initiateCall({
+        to_number: toNumber.trim(),
+        lead_name: leadName.trim() || undefined,
+        opening_line: opening.trim() || undefined,
+        persona,
+        qualification_framework: framework,
+      });
+      toast.success(
+        `Dialing ${call.to_number} — sid ${call.call_sid ?? "(pending)"}`
+      );
+      onPlaced();
+      setToNumber("");
+      setLeadName("");
+    } catch (err) {
+      const detail =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data
+          ?.detail || (err as Error)?.message || "Failed to dial";
+      toast.error(detail);
+    } finally {
+      setDialing(false);
+    }
+  }
+
+  return (
+    <div className="rounded-[12px] border border-white/[0.07] bg-white/[0.03] p-5">
+      <div className="flex items-center gap-2 mb-4">
+        <span className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-emerald-500/15 text-emerald-300">
+          <PhoneCall size={14} />
+        </span>
+        <div>
+          <div className="text-[14px] font-semibold text-white">
+            Outbound dialer
+          </div>
+          <div className="text-[11px] text-white/40">
+            Twilio PSTN → LiveKit SIP → AI agent
+          </div>
+        </div>
+      </div>
+
+      <label className="block text-[11px] font-medium text-white/40 tracking-wide mb-1.5">
+        Destination number (E.164)
+      </label>
+      <input
+        value={toNumber}
+        onChange={(e) => setToNumber(e.target.value)}
+        placeholder="+14155551234"
+        className="w-full bg-white/[0.04] border border-white/[0.09] focus:border-violet-500/50 focus:ring-2 focus:ring-violet-500/10 rounded-[8px] px-3 py-2.5 text-[13px] text-white placeholder-white/20 outline-none transition-all font-mono"
+      />
+      {toNumber && !validNumber && (
+        <div className="mt-1 text-[11px] text-amber-300">
+          Must start with “+” and have 7–15 digits.
+        </div>
+      )}
+
+      <label className="block text-[11px] font-medium text-white/40 tracking-wide mt-4 mb-1.5">
+        Lead name (optional)
+      </label>
+      <input
+        value={leadName}
+        onChange={(e) => setLeadName(e.target.value)}
+        placeholder="Jane Doe"
+        className="w-full bg-white/[0.04] border border-white/[0.09] focus:border-violet-500/50 focus:ring-2 focus:ring-violet-500/10 rounded-[8px] px-3 py-2.5 text-[13px] text-white placeholder-white/20 outline-none transition-all"
+      />
+
+      <label className="block text-[11px] font-medium text-white/40 tracking-wide mt-4 mb-1.5">
+        Opening line
+      </label>
+      <textarea
+        value={opening}
+        onChange={(e) => setOpening(e.target.value)}
+        rows={2}
+        className="w-full bg-white/[0.04] border border-white/[0.09] focus:border-violet-500/50 focus:ring-2 focus:ring-violet-500/10 rounded-[8px] px-3 py-2.5 text-[13px] text-white placeholder-white/20 outline-none transition-all resize-none"
+      />
+
+      <div className="grid grid-cols-2 gap-3 mt-4">
+        <div>
+          <label className="block text-[11px] font-medium text-white/40 tracking-wide mb-1.5">
+            Persona
+          </label>
+          <select
+            value={persona}
+            onChange={(e) => {
+              setPersona(e.target.value);
+              onPersonaChange(e.target.value);
+            }}
+            className="w-full bg-white/[0.04] border border-white/[0.09] focus:border-violet-500/50 rounded-[8px] px-3 py-2.5 text-[12px] text-white outline-none"
+          >
+            {personas.length === 0 ? (
+              <option value="outbound_sdr">Outbound SDR</option>
+            ) : (
+              personas.map((p) => (
+                <option key={p.name} value={p.name}>
+                  {p.name.replace(/_/g, " ")}
+                </option>
+              ))
+            )}
+          </select>
+        </div>
+        <div>
+          <label className="block text-[11px] font-medium text-white/40 tracking-wide mb-1.5">
+            Framework
+          </label>
+          <select
+            value={framework}
+            onChange={(e) => setFramework(e.target.value as "BANT" | "MEDDICC")}
+            className="w-full bg-white/[0.04] border border-white/[0.09] focus:border-violet-500/50 rounded-[8px] px-3 py-2.5 text-[12px] text-white outline-none"
+          >
+            <option value="BANT">BANT</option>
+            <option value="MEDDICC">MEDDICC</option>
+          </select>
+        </div>
+      </div>
+
+      <Button
+        onClick={handleDial}
+        disabled={dialing || !validNumber}
+        className="mt-5 w-full bg-emerald-600 hover:bg-emerald-500 text-white"
+      >
+        {dialing ? (
+          <>
+            <Loader2 size={13} className="animate-spin" />
+            Dialing…
+          </>
+        ) : (
+          <>
+            <PhoneCall size={13} />
+            Place call
+          </>
+        )}
+      </Button>
+
+      <p className="text-[11px] text-white/30 mt-4 leading-relaxed">
+        The backend creates a Twilio call, mints a LiveKit room, and drops the
+        AI agent in. Twilio webhook callbacks drive the status column. Real
+        audio bridging requires <code className="text-white/55">LIVEKIT_SIP_URI</code>
+         + a SIP trunk in LiveKit Cloud.
+      </p>
+    </div>
+  );
+}
+
+function RecentPhoneCalls({
+  calls,
+  loading,
+  onRefresh,
+}: {
+  calls: TelephonyCall[];
+  loading: boolean;
+  onRefresh: () => void;
+}) {
+  return (
+    <div className="rounded-[12px] border border-white/[0.07] bg-white/[0.03] flex flex-col">
+      <div className="px-4 py-3 border-b border-white/[0.05] flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center justify-center w-7 h-7 rounded-[7px] bg-violet-500/15 text-violet-300">
+            <Phone size={13} />
+          </span>
+          <div>
+            <div className="text-[13px] font-medium text-white">
+              Recent calls
+            </div>
+            <div className="text-[11px] text-white/40">
+              {calls.length} call{calls.length === 1 ? "" : "s"}
+            </div>
+          </div>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onRefresh}
+          disabled={loading}
+          className="border-white/[0.08] bg-white/[0.03] text-white/80 hover:bg-white/[0.06]"
+        >
+          <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
+          Refresh
+        </Button>
+      </div>
+
+      {calls.length === 0 ? (
+        <div className="px-4 py-10 text-center text-[12px] text-white/40">
+          {loading ? "Loading…" : "No calls yet. Dial one to see it here."}
+        </div>
+      ) : (
+        <ul className="divide-y divide-white/[0.05]">
+          {calls.map((c) => (
+            <CallRow key={c.id} call={c} onChanged={onRefresh} />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function CallRow({
+  call,
+  onChanged,
+}: {
+  call: TelephonyCall;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const terminal = ["completed", "failed", "busy", "no-answer", "canceled"].includes(
+    call.status
+  );
+
+  async function handleCancel() {
+    setBusy(true);
+    try {
+      await cancelCall(call.id);
+      toast.message("Call canceled");
+      onChanged();
+    } catch (err) {
+      const detail =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data
+          ?.detail || (err as Error)?.message || "Cancel failed";
+      toast.error(detail);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRetry() {
+    setBusy(true);
+    try {
+      const r = await retryCall(call.id);
+      toast.success(`Retry placed — new sid ${r.new_call.call_sid ?? "(pending)"}`);
+      onChanged();
+    } catch (err) {
+      const detail =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data
+          ?.detail || (err as Error)?.message || "Retry failed";
+      toast.error(detail);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <li className="px-4 py-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-[13px] text-white">
+            <span className="font-mono">{call.to_number}</span>
+            {call.lead_name && (
+              <span className="text-white/45">· {call.lead_name}</span>
+            )}
+            <StatusPill status={call.status} />
+            {call.direction === "inbound" && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-sky-500/15 text-sky-300">
+                inbound
+              </span>
+            )}
+          </div>
+          <div className="text-[11px] text-white/35 mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
+            <span>room {call.room_name}</span>
+            {call.call_sid && <span>sid {call.call_sid.slice(0, 14)}…</span>}
+            {call.duration_seconds != null && (
+              <span>{call.duration_seconds}s</span>
+            )}
+            {call.price != null && (
+              <span>
+                {call.price} {call.price_unit}
+              </span>
+            )}
+            {call.error_code && (
+              <span className="text-red-300">
+                error {call.error_code}: {call.error_message}
+              </span>
+            )}
+            {call.retry_count > 0 && <span>retry #{call.retry_count}</span>}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-1.5 shrink-0">
+          {!terminal && (
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={busy}
+              onClick={handleCancel}
+            >
+              <X size={12} />
+              Cancel
+            </Button>
+          )}
+          {(call.status === "failed" ||
+            call.status === "busy" ||
+            call.status === "no-answer" ||
+            call.status === "canceled") && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={handleRetry}
+              className="border-white/[0.08] bg-white/[0.03] text-white/80 hover:bg-white/[0.06]"
+            >
+              <RefreshCw size={12} />
+              Retry
+            </Button>
+          )}
+        </div>
+      </div>
+    </li>
+  );
+}
+
+function StatusPill({ status }: { status: TelephonyCall["status"] }) {
+  const tone: Record<TelephonyCall["status"], string> = {
+    queued: "bg-white/[0.06] text-white/60",
+    initiated: "bg-sky-500/15 text-sky-300",
+    ringing: "bg-amber-500/15 text-amber-300",
+    "in-progress": "bg-emerald-500/15 text-emerald-300",
+    completed: "bg-emerald-500/20 text-emerald-200",
+    failed: "bg-red-500/15 text-red-300",
+    busy: "bg-orange-500/15 text-orange-300",
+    "no-answer": "bg-orange-500/15 text-orange-300",
+    canceled: "bg-white/[0.06] text-white/45",
+  };
+  return (
+    <span
+      className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded-full ${tone[status]}`}
+    >
+      {status}
+    </span>
+  );
+}
+
+function Bubble({ bubble }: { bubble: ChatBubble }) {
+  const isUser = bubble.role === "user";
+  return (
+    <div className={`flex gap-2 ${isUser ? "flex-row-reverse" : ""}`}>
+      <span
+        className={`shrink-0 inline-flex items-center justify-center w-6 h-6 rounded-full text-[10px] font-medium ${
+          isUser
+            ? "bg-white/[0.06] text-white/80"
+            : "bg-violet-500/15 text-violet-200"
+        }`}
+      >
+        {isUser ? "U" : "AI"}
+      </span>
+      <div
+        className={`max-w-[78%] px-3 py-2 rounded-[10px] text-[13px] leading-relaxed ${
+          isUser
+            ? "bg-violet-600/85 text-white"
+            : "bg-white/[0.04] text-white/90 border border-white/[0.06]"
+        }`}
+      >
+        <p className="whitespace-pre-wrap">{bubble.text}</p>
+        {!isUser && bubble.latency_ms != null && (
+          <div className="mt-1 text-[10px] text-white/40">
+            {bubble.latency_ms}ms · {bubble.total_tokens ?? 0} tokens
+          </div>
+        )}
       </div>
     </div>
   );

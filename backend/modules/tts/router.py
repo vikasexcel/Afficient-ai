@@ -79,7 +79,7 @@ async def speak(
         )
 
     try:
-        bytes_streamed, duration_ms = await streamer.speak_into_room(
+        stats = await streamer.speak_into_room(
             room=data.room,
             text=data.text,
             voice_id=data.voice_id,
@@ -94,8 +94,9 @@ async def speak(
         room=data.room,
         voice_id=voice_id,
         model_id=model_id,
-        bytes_streamed=bytes_streamed,
-        duration_ms=duration_ms,
+        bytes_streamed=stats.bytes_streamed,
+        duration_ms=stats.total_ms,
+        stages=stats.timings(),
     )
 
 

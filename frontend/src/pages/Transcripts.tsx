@@ -1,12 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Clock,
   Copy,
   Download,
   FileText,
   Phone,
-  PhoneIncoming,
-  PhoneOutgoing,
+  RefreshCw,
   Search,
   Sparkles,
 } from "lucide-react";
@@ -16,214 +15,38 @@ import AppLayout from "@/components/layout/AppLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import {
+  finalizeCall,
+  getTranscript,
+  listCalls,
+  type CallListEntry,
+  type CallSummary,
+  type QualificationSnapshot,
+  type TranscriptEntry,
+} from "@/services/ai";
 
-type Direction = "inbound" | "outbound";
 type Sentiment = "positive" | "neutral" | "negative";
 
-type TurnSpeaker = "agent" | "lead";
+function sentimentFor(c: CallListEntry): Sentiment {
+  const score = c.qualification_score ?? 0;
+  if (c.qualification_status === "qualified" || score >= 60) return "positive";
+  if (c.qualification_status === "disqualified") return "negative";
+  return "neutral";
+}
 
-type Turn = {
-  speaker: TurnSpeaker;
-  at: string;
-  text: string;
-};
-
-type Transcript = {
-  id: string;
-  lead: string;
-  company: string;
-  agent: string;
-  direction: Direction;
-  duration: string;
-  startedAt: string;
-  sentiment: Sentiment;
-  summary: string;
-  tags: string[];
-  turns: Turn[];
-};
-
-const TRANSCRIPTS: Transcript[] = [
-  {
-    id: "tr_001",
-    lead: "Aarav Sharma",
-    company: "Northwind Labs",
-    agent: "Aditi R.",
-    direction: "outbound",
-    duration: "6m 12s",
-    startedAt: "Today · 14:22",
-    sentiment: "positive",
-    summary:
-      "Aarav confirmed budget approval for Q3 and asked for a tailored demo focused on outbound dialer flows. Demo scheduled for next Tuesday.",
-    tags: ["Demo scheduled", "Budget confirmed"],
-    turns: [
-      {
-        speaker: "agent",
-        at: "00:00",
-        text: "Hi Aarav, thanks for picking up. This is Aditi from Aifficient — is now a quick moment to chat about your outbound stack?",
-      },
-      {
-        speaker: "lead",
-        at: "00:08",
-        text: "Sure, I have about ten minutes before my next call.",
-      },
-      {
-        speaker: "agent",
-        at: "00:11",
-        text: "Perfect. Last time we spoke you mentioned your team was juggling two dialers — has that changed?",
-      },
-      {
-        speaker: "lead",
-        at: "00:18",
-        text: "It actually got worse. We just absorbed another team and they bring a third tool. We have budget approved for Q3 to consolidate.",
-      },
-      {
-        speaker: "agent",
-        at: "00:32",
-        text: "Great signal. Would a 30-minute tailored demo focused on dialer flows work next Tuesday?",
-      },
-      {
-        speaker: "lead",
-        at: "00:40",
-        text: "Tuesday 4pm IST works. Send the invite to me and our ops lead.",
-      },
-    ],
-  },
-  {
-    id: "tr_002",
-    lead: "Priya Iyer",
-    company: "Brightpath",
-    agent: "Karan S.",
-    direction: "inbound",
-    duration: "3m 48s",
-    startedAt: "Today · 11:04",
-    sentiment: "neutral",
-    summary:
-      "Priya asked about integrations with HubSpot and pricing tiers. Sent integration docs and pricing PDF after the call.",
-    tags: ["Pricing", "Integration"],
-    turns: [
-      {
-        speaker: "lead",
-        at: "00:00",
-        text: "Hi, I was looking at your site — do you integrate with HubSpot natively?",
-      },
-      {
-        speaker: "agent",
-        at: "00:05",
-        text: "Hi Priya, yes — bi-directional sync for contacts, calls, and notes. Are you on the Pro or Enterprise HubSpot tier?",
-      },
-      {
-        speaker: "lead",
-        at: "00:14",
-        text: "Pro for now, planning to move up.",
-      },
-      {
-        speaker: "agent",
-        at: "00:18",
-        text: "Got it. Pro is fully supported. I'll send our integration doc and the pricing breakdown right after this call.",
-      },
-    ],
-  },
-  {
-    id: "tr_003",
-    lead: "Daniel Cohen",
-    company: "Helio Energy",
-    agent: "Riya M.",
-    direction: "outbound",
-    duration: "8m 51s",
-    startedAt: "Yesterday · 17:38",
-    sentiment: "positive",
-    summary:
-      "Strong fit. Daniel wants to pilot with 5 reps for 30 days starting in two weeks. Contract draft going out today.",
-    tags: ["Pilot", "Contract", "Hot"],
-    turns: [
-      {
-        speaker: "agent",
-        at: "00:00",
-        text: "Daniel, thanks for the time. I want to keep this tight — last call you said pilot was on the table if we could prove ramp-up under two weeks.",
-      },
-      {
-        speaker: "lead",
-        at: "00:11",
-        text: "Right. And the call quality has to be airtight, we're in regulated territory.",
-      },
-      {
-        speaker: "agent",
-        at: "00:17",
-        text: "Understood. We're SOC 2 Type II, and all calls are stored in your region. Pilot with 5 reps for 30 days, starting in two weeks — workable?",
-      },
-      {
-        speaker: "lead",
-        at: "00:28",
-        text: "Workable. Send the contract today, I'll loop in legal.",
-      },
-    ],
-  },
-  {
-    id: "tr_004",
-    lead: "Lucas Ferreira",
-    company: "Viacore",
-    agent: "Karan S.",
-    direction: "outbound",
-    duration: "2m 10s",
-    startedAt: "2 days ago · 09:14",
-    sentiment: "negative",
-    summary:
-      "Lucas signed with a competitor last quarter. Marked lost; revisit in 6 months when their contract is up.",
-    tags: ["Lost", "Revisit Q4"],
-    turns: [
-      {
-        speaker: "agent",
-        at: "00:00",
-        text: "Lucas, hi — circling back on our conversation from March.",
-      },
-      {
-        speaker: "lead",
-        at: "00:04",
-        text: "Appreciate it, but we signed with another vendor last quarter. Locked in for a year.",
-      },
-      {
-        speaker: "agent",
-        at: "00:10",
-        text: "Understood. Mind if I reach back out in Q4 closer to renewal?",
-      },
-      {
-        speaker: "lead",
-        at: "00:14",
-        text: "Yes, that's fine.",
-      },
-    ],
-  },
-  {
-    id: "tr_005",
-    lead: "Mei Tanaka",
-    company: "OrbitFin",
-    agent: "Aditi R.",
-    direction: "inbound",
-    duration: "5m 02s",
-    startedAt: "3 days ago · 15:50",
-    sentiment: "positive",
-    summary:
-      "Mei reviewed the contract and signed off. Asked about onboarding timeline — kickoff scheduled for Monday.",
-    tags: ["Closed-Won", "Onboarding"],
-    turns: [
-      {
-        speaker: "lead",
-        at: "00:00",
-        text: "Hey, contract is signed. What's next on your side?",
-      },
-      {
-        speaker: "agent",
-        at: "00:04",
-        text: "Congrats and welcome! Onboarding kicks off Monday — you'll get an email today with the kickoff doc and Slack channel invite.",
-      },
-      {
-        speaker: "lead",
-        at: "00:14",
-        text: "Perfect.",
-      },
-    ],
-  },
-];
+function formatRelative(iso: string): string {
+  const ts = new Date(iso).getTime();
+  if (Number.isNaN(ts)) return iso;
+  const diff = Date.now() - ts;
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 30) return `${day}d ago`;
+  return new Date(iso).toLocaleDateString();
+}
 
 const SENTIMENT_STYLES: Record<Sentiment, { label: string; className: string }> =
   {
@@ -243,33 +66,71 @@ const SENTIMENT_STYLES: Record<Sentiment, { label: string; className: string }> 
 
 export default function Transcripts() {
   const [query, setQuery] = useState("");
-  const [selectedId, setSelectedId] = useState<string>(TRANSCRIPTS[0].id);
+  const [calls, setCalls] = useState<CallListEntry[]>([]);
+  const [loadingList, setLoadingList] = useState(true);
+  const [listError, setListError] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  async function loadCalls() {
+    setLoadingList(true);
+    setListError(null);
+    try {
+      const rows = await listCalls(50);
+      setCalls(rows);
+      if (rows.length > 0 && !selectedId) {
+        setSelectedId(rows[0].call_id);
+      }
+    } catch (err) {
+      const detail =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data
+          ?.detail || (err as Error)?.message || "Failed to load calls";
+      setListError(detail);
+    } finally {
+      setLoadingList(false);
+    }
+  }
+
+  useEffect(() => {
+    loadCalls();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return TRANSCRIPTS;
-    return TRANSCRIPTS.filter(
-      (t) =>
-        t.lead.toLowerCase().includes(q) ||
-        t.company.toLowerCase().includes(q) ||
-        t.agent.toLowerCase().includes(q) ||
-        t.summary.toLowerCase().includes(q) ||
-        t.tags.some((tag) => tag.toLowerCase().includes(q))
+    if (!q) return calls;
+    return calls.filter(
+      (c) =>
+        c.call_id.toLowerCase().includes(q) ||
+        (c.summary ?? "").toLowerCase().includes(q) ||
+        (c.persona ?? "").toLowerCase().includes(q)
     );
-  }, [query]);
+  }, [query, calls]);
 
-  const selected =
-    TRANSCRIPTS.find((t) => t.id === selectedId) ?? filtered[0] ?? null;
+  const selected = calls.find((c) => c.call_id === selectedId) ?? null;
 
   return (
     <AppLayout>
       <div className="space-y-5 max-w-6xl">
-        <div>
-          <h1 className="text-2xl font-medium text-white">Transcripts</h1>
-          <p className="text-[13px] text-white/40 mt-1">
-            Searchable call transcripts with AI summaries. Backend wiring coming
-            soon.
-          </p>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-medium text-white">Transcripts</h1>
+            <p className="text-[13px] text-white/40 mt-1">
+              Real call transcripts and AI-generated summaries from GPT-4o.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="border-white/[0.08] bg-white/[0.03] text-white/80 hover:bg-white/[0.06] hover:text-white"
+            onClick={loadCalls}
+            disabled={loadingList}
+          >
+            <RefreshCw
+              size={13}
+              className={loadingList ? "animate-spin" : ""}
+            />
+            Refresh
+          </Button>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-[360px_1fr] gap-4 min-h-[640px]">
@@ -290,20 +151,35 @@ export default function Transcripts() {
             </div>
 
             <div className="flex-1 overflow-y-auto">
-              {filtered.length === 0 ? (
+              {listError ? (
+                <div className="py-8 px-4 text-[12px] text-red-300">
+                  {listError}
+                </div>
+              ) : loadingList ? (
                 <div className="py-12 text-center text-[12px] text-white/45">
-                  No transcripts match "{query}".
+                  Loading…
+                </div>
+              ) : filtered.length === 0 ? (
+                <div className="py-12 px-6 text-center text-[12px] text-white/45 space-y-2">
+                  <FileText
+                    size={20}
+                    className="mx-auto text-white/30"
+                  />
+                  <p>No AI calls yet.</p>
+                  <p className="text-[11px] text-white/35">
+                    Start a conversation from the Calls page — transcripts and
+                    summaries will appear here automatically.
+                  </p>
                 </div>
               ) : (
-                filtered.map((t) => {
-                  const active = selected?.id === t.id;
-                  const DirIcon =
-                    t.direction === "inbound" ? PhoneIncoming : PhoneOutgoing;
+                filtered.map((c) => {
+                  const active = selected?.call_id === c.call_id;
+                  const sent = sentimentFor(c);
                   return (
                     <button
-                      key={t.id}
+                      key={c.call_id}
                       type="button"
-                      onClick={() => setSelectedId(t.id)}
+                      onClick={() => setSelectedId(c.call_id)}
                       className={cn(
                         "w-full text-left px-4 py-3 border-b border-white/[0.04] transition-colors",
                         active
@@ -312,24 +188,28 @@ export default function Transcripts() {
                       )}
                     >
                       <div className="flex items-center justify-between gap-2">
-                        <div className="text-[13px] text-white truncate">
-                          {t.lead}
+                        <div className="text-[13px] text-white truncate font-mono">
+                          {c.call_id}
                         </div>
-                        <SentimentDot sentiment={t.sentiment} />
+                        <SentimentDot sentiment={sent} />
                       </div>
                       <div className="text-[11px] text-white/45 mt-0.5 truncate">
-                        {t.company}
+                        {c.persona ?? "—"} · {c.framework ?? "BANT"}
                       </div>
                       <div className="flex items-center gap-3 mt-2 text-[11px] text-white/40">
                         <span className="inline-flex items-center gap-1">
-                          <DirIcon size={11} />
-                          {t.direction}
+                          <FileText size={11} />
+                          {c.total_turns} turns
                         </span>
                         <span className="inline-flex items-center gap-1">
                           <Clock size={11} />
-                          {t.duration}
+                          {formatRelative(c.updated_at)}
                         </span>
-                        <span className="truncate">{t.startedAt}</span>
+                        {c.qualification_score != null && (
+                          <span className="ml-auto text-violet-300 font-medium">
+                            {c.qualification_score}/100
+                          </span>
+                        )}
                       </div>
                     </button>
                   );
@@ -339,10 +219,15 @@ export default function Transcripts() {
           </div>
 
           {selected ? (
-            <TranscriptDetail transcript={selected} />
+            <TranscriptDetail
+              call={selected}
+              onChanged={loadCalls}
+            />
           ) : (
             <div className="rounded-[12px] border border-white/[0.06] bg-white/[0.02] flex items-center justify-center text-[13px] text-white/45 min-h-[480px]">
-              Select a transcript to view details.
+              {calls.length === 0 && !loadingList
+                ? "Run a conversation from the Calls page to populate this view."
+                : "Select a transcript to view details."}
             </div>
           )}
         </div>
@@ -351,15 +236,85 @@ export default function Transcripts() {
   );
 }
 
-function TranscriptDetail({ transcript: t }: { transcript: Transcript }) {
-  const DirIcon = t.direction === "inbound" ? PhoneIncoming : PhoneOutgoing;
+// ---------------------------------------------------------------------------
+// Detail panel
+// ---------------------------------------------------------------------------
 
-  function copySummary() {
-    navigator.clipboard
-      .writeText(t.summary)
-      .then(() => toast.success("Summary copied"))
-      .catch(() => toast.error("Failed to copy"));
+function TranscriptDetail({
+  call,
+  onChanged,
+}: {
+  call: CallListEntry;
+  onChanged: () => Promise<void> | void;
+}) {
+  const [entries, setEntries] = useState<TranscriptEntry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [finalizing, setFinalizing] = useState(false);
+  const [summary, setSummary] = useState<CallSummary | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setSummary(null);
+    getTranscript(call.call_id)
+      .then((res) => {
+        if (cancelled) return;
+        setEntries(res.entries);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        const detail =
+          (err as { response?: { data?: { detail?: string } } })?.response?.data
+            ?.detail || (err as Error)?.message || "Failed to load transcript";
+        setError(detail);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [call.call_id]);
+
+  async function copySummary() {
+    const text = summary?.summary ?? call.summary;
+    if (!text) {
+      toast.message("No summary yet — finalize the call first.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success("Summary copied");
+    } catch {
+      toast.error("Failed to copy");
+    }
   }
+
+  async function handleFinalize() {
+    setFinalizing(true);
+    try {
+      const res = await finalizeCall(call.call_id);
+      setSummary(res);
+      toast.success("Call finalized");
+      await onChanged();
+    } catch (err) {
+      const detail =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data
+          ?.detail || (err as Error)?.message || "Failed to finalize";
+      toast.error(detail);
+    } finally {
+      setFinalizing(false);
+    }
+  }
+
+  const displaySummary = summary?.summary ?? call.summary;
+  const displayQualification: QualificationSnapshot | null =
+    summary?.qualification ?? null;
+
+  const sent = sentimentFor(call);
+  const sentStyle = SENTIMENT_STYLES[sent];
 
   return (
     <div className="rounded-[12px] border border-white/[0.06] bg-white/[0.02] flex flex-col overflow-hidden">
@@ -367,20 +322,21 @@ function TranscriptDetail({ transcript: t }: { transcript: Transcript }) {
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h2 className="text-[16px] font-medium text-white truncate">
-                {t.lead}
+              <h2 className="text-[15px] font-mono text-white truncate">
+                {call.call_id}
               </h2>
               <span
                 className={cn(
                   "inline-flex items-center h-5 px-2 rounded-full border text-[10px] font-medium",
-                  SENTIMENT_STYLES[t.sentiment].className
+                  sentStyle.className
                 )}
               >
-                {SENTIMENT_STYLES[t.sentiment].label}
+                {sentStyle.label}
               </span>
             </div>
             <div className="text-[12px] text-white/45 mt-0.5">
-              {t.company} · with {t.agent}
+              {call.persona ?? "—"} · {call.framework ?? "BANT"} ·{" "}
+              {call.qualification_status ?? "in progress"}
             </div>
           </div>
 
@@ -389,7 +345,19 @@ function TranscriptDetail({ transcript: t }: { transcript: Transcript }) {
               variant="outline"
               size="sm"
               className="border-white/[0.08] bg-white/[0.03] text-white/80 hover:bg-white/[0.06] hover:text-white"
-              onClick={() => toast.message("Downloading transcript")}
+              onClick={handleFinalize}
+              disabled={finalizing}
+            >
+              <Sparkles size={13} />
+              {finalizing ? "Finalizing…" : "Finalize"}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-white/[0.08] bg-white/[0.03] text-white/80 hover:bg-white/[0.06] hover:text-white"
+              onClick={() =>
+                downloadJson(`${call.call_id}.json`, { call, entries })
+              }
             >
               <Download size={13} />
               Export
@@ -397,7 +365,7 @@ function TranscriptDetail({ transcript: t }: { transcript: Transcript }) {
             <Button
               size="sm"
               className="bg-violet-600 hover:bg-violet-500 text-white"
-              onClick={() => toast.message("Recall is queued")}
+              onClick={() => toast.message("Recall flow coming soon")}
             >
               <Phone size={13} />
               Call again
@@ -405,62 +373,88 @@ function TranscriptDetail({ transcript: t }: { transcript: Transcript }) {
           </div>
         </div>
 
-        <div className="flex items-center gap-3 mt-4 text-[11px] text-white/50">
-          <span className="inline-flex items-center gap-1">
-            <DirIcon size={12} />
-            {t.direction}
-          </span>
+        <div className="flex items-center gap-4 mt-4 text-[11px] text-white/50">
           <span className="inline-flex items-center gap-1">
             <Clock size={12} />
-            {t.duration}
+            {formatRelative(call.updated_at)}
           </span>
-          <span>{t.startedAt}</span>
+          <span>{call.total_turns} turns</span>
+          <span>{call.total_tokens} tokens</span>
+          {call.qualification_score != null && (
+            <span className="ml-auto text-violet-300">
+              score {call.qualification_score}/100
+            </span>
+          )}
         </div>
       </div>
 
-      <div className="p-5 border-b border-white/[0.05] bg-violet-500/[0.03]">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="inline-flex items-center justify-center h-6 w-6 rounded-[6px] bg-violet-500/15 border border-violet-500/25 text-violet-200">
-              <Sparkles size={12} />
-            </span>
-            <span className="text-[12px] font-medium text-white/85">
-              AI summary
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={copySummary}
-            className="inline-flex items-center gap-1 text-[11px] text-white/55 hover:text-white/85 transition-colors"
-          >
-            <Copy size={11} />
-            Copy
-          </button>
-        </div>
-        <p className="text-[13px] text-white/80 leading-relaxed mt-3">
-          {t.summary}
-        </p>
-        {t.tags.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mt-3">
-            {t.tags.map((tag) => (
-              <span
-                key={tag}
-                className="inline-flex items-center h-5 px-2 rounded-full bg-white/[0.05] border border-white/[0.08] text-[11px] text-white/70"
-              >
-                {tag}
+      {(displaySummary || displayQualification) && (
+        <div className="p-5 border-b border-white/[0.05] bg-violet-500/[0.03]">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center justify-center h-6 w-6 rounded-[6px] bg-violet-500/15 border border-violet-500/25 text-violet-200">
+                <Sparkles size={12} />
               </span>
-            ))}
+              <span className="text-[12px] font-medium text-white/85">
+                AI summary
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={copySummary}
+              className="inline-flex items-center gap-1 text-[11px] text-white/55 hover:text-white/85 transition-colors"
+            >
+              <Copy size={11} />
+              Copy
+            </button>
           </div>
-        )}
-      </div>
+          {displaySummary ? (
+            <p className="text-[13px] text-white/80 leading-relaxed mt-3 whitespace-pre-wrap">
+              {displaySummary}
+            </p>
+          ) : (
+            <p className="text-[12px] text-white/45 mt-3 italic">
+              No summary yet — click Finalize to generate one with GPT-4o.
+            </p>
+          )}
+          {displayQualification &&
+            displayQualification.answered_fields.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mt-3">
+                {displayQualification.answered_fields.map((f) => (
+                  <span
+                    key={f}
+                    className="inline-flex items-center h-5 px-2 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[11px] text-emerald-300"
+                  >
+                    {f}
+                  </span>
+                ))}
+              </div>
+            )}
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto p-5">
         <div className="flex items-center gap-2 mb-4 text-[11px] font-medium text-white/45 uppercase tracking-wider">
           <FileText size={11} />
-          Transcript
+          Transcript {entries.length > 0 && `· ${entries.length} entries`}
         </div>
+
+        {loading && (
+          <div className="text-[12px] text-white/45">Loading transcript…</div>
+        )}
+        {error && (
+          <div className="text-[12px] text-red-300 bg-red-500/10 border border-red-500/20 rounded-[8px] px-3 py-2">
+            {error}
+          </div>
+        )}
+        {!loading && !error && entries.length === 0 && (
+          <div className="text-[12px] text-white/45 italic">
+            No transcript entries yet for this call.
+          </div>
+        )}
+
         <div className="space-y-3">
-          {t.turns.map((turn, i) => (
+          {entries.map((turn, i) => (
             <TurnRow key={i} turn={turn} />
           ))}
         </div>
@@ -469,30 +463,40 @@ function TranscriptDetail({ transcript: t }: { transcript: Transcript }) {
   );
 }
 
-function TurnRow({ turn }: { turn: Turn }) {
-  const isAgent = turn.speaker === "agent";
+function TurnRow({ turn }: { turn: TranscriptEntry }) {
+  const isAssistant = turn.role === "assistant";
+  const isUser = turn.role === "user";
+  const tag = isAssistant ? "AI" : isUser ? "U" : turn.role.slice(0, 1).toUpperCase();
+  const label = isAssistant ? "Assistant" : isUser ? "User" : turn.role;
+
   return (
     <div className="flex gap-3">
       <div
         className={cn(
           "shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-full border text-[10px] font-medium",
-          isAgent
+          isAssistant
             ? "bg-violet-500/10 border-violet-500/25 text-violet-200"
-            : "bg-white/[0.05] border-white/[0.08] text-white/75"
+            : isUser
+            ? "bg-white/[0.05] border-white/[0.08] text-white/75"
+            : "bg-sky-500/10 border-sky-500/25 text-sky-200"
         )}
       >
-        {isAgent ? "AI" : "L"}
+        {tag}
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 text-[11px] text-white/45">
-          <span className="font-medium text-white/65">
-            {isAgent ? "Agent" : "Lead"}
-          </span>
+          <span className="font-medium text-white/65">{label}</span>
           <span>·</span>
-          <span>{turn.at}</span>
+          <span>{new Date(turn.ts).toLocaleTimeString()}</span>
+          {turn.latency_ms != null && (
+            <>
+              <span>·</span>
+              <span className="text-violet-300/70">{turn.latency_ms}ms</span>
+            </>
+          )}
         </div>
-        <p className="text-[13px] text-white/85 leading-relaxed mt-1">
-          {turn.text}
+        <p className="text-[13px] text-white/85 leading-relaxed mt-1 whitespace-pre-wrap">
+          {turn.content}
         </p>
       </div>
     </div>
@@ -507,4 +511,18 @@ function SentimentDot({ sentiment }: { sentiment: Sentiment }) {
       ? "bg-red-400"
       : "bg-white/40";
   return <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", color)} />;
+}
+
+function downloadJson(filename: string, payload: unknown) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }

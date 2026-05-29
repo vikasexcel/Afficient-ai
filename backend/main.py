@@ -6,6 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from common.logging import configure_logging, get_logger
 from common.security.protection import RateLimitMiddleware
 from config.settings import settings
+from modules.ai.dependencies import shutdown_ai
+from modules.ai.router import router as ai_router
 from modules.auth.router import router as auth_router
 from modules.campaign.router import router as campaign_router
 from modules.health.router import router as health_router
@@ -13,6 +15,9 @@ from modules.livekit.dependencies import shutdown_livekit_service
 from modules.livekit.router import router as livekit_router
 from modules.members.router import router as members_router
 from modules.organization.router import router as organization_router
+from modules.stt.router import router as stt_router
+from modules.telephony.dependencies import shutdown_telephony
+from modules.telephony.router import router as telephony_router
 from modules.tts.router import router as tts_router
 
 
@@ -24,6 +29,8 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        await shutdown_telephony()
+        await shutdown_ai()
         await shutdown_livekit_service()
         log.info("app.shutdown")
 
@@ -41,6 +48,8 @@ app.add_middleware(
         "http://localhost:5174",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:5174",
+        "http://localhost:20197",
+        "http://127.0.0.1:20197",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -56,6 +65,9 @@ for r in (
     organization_router,
     livekit_router,
     tts_router,
+    stt_router,
+    ai_router,
+    telephony_router,
 ):
     app.include_router(r, prefix=settings.API_PREFIX)
 

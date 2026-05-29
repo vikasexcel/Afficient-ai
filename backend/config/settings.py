@@ -50,6 +50,62 @@ class Settings(BaseSettings):
     ELEVENLABS_AGENT_IDENTITY: str = "ai-agent"
     ELEVENLABS_AGENT_NAME: str = "AI Agent"
 
+    # Deepgram STT
+    DEEPGRAM_API_KEY: str = ""
+    DEEPGRAM_MODEL: str = "nova-3"
+    DEEPGRAM_LANGUAGE: str = "en"
+    DEEPGRAM_INTERIM_RESULTS: bool = True
+    DEEPGRAM_VAD_EVENTS: bool = True
+    DEEPGRAM_ENDPOINTING_MS: int = 300
+    DEEPGRAM_UTTERANCE_END_MS: int = 1000
+    DEEPGRAM_SMART_FORMAT: bool = True
+    DEEPGRAM_PUNCTUATE: bool = True
+    DEEPGRAM_STT_AGENT_IDENTITY: str = "ai-stt-agent"
+    DEEPGRAM_STT_AGENT_NAME: str = "AI STT Agent"
+
+    # OpenAI / GPT-4o conversation engine
+    OPENAI_API_KEY: str = ""
+    OPENAI_BASE_URL: str | None = None
+    OPENAI_ORG_ID: str | None = None
+    OPENAI_MODEL: str = "gpt-4o"
+    OPENAI_TEMPERATURE: float = 0.4
+    OPENAI_MAX_TOKENS: int = 320
+    OPENAI_TIMEOUT_SECONDS: float = 30.0
+    OPENAI_MAX_RETRIES: int = 2
+    AI_MEMORY_TTL_SECONDS: int = 60 * 60 * 6  # 6h
+    AI_MEMORY_MAX_TURNS: int = 24  # rolling window (user+assistant pairs)
+    AI_QUALIFICATION_FRAMEWORK: str = "BANT"  # or MEDDICC
+    AI_DEFAULT_PERSONA: str = "outbound_sdr"
+
+    # Twilio PSTN
+    # Account SID (AC...) — always required. Find it on the Twilio
+    # console homepage; it is not a secret.
+    TWILIO_ACCOUNT_SID: str = ""
+    # Auth Token — only needed for X-Twilio-Signature validation. When
+    # blank we force-disable signature validation.
+    TWILIO_AUTH_TOKEN: str = ""
+    # Optional API Key auth (preferred for production: scoped keys can
+    # be rotated/revoked without touching the master auth token).
+    # When both are set the SDK is initialised with API Key auth.
+    TWILIO_API_KEY_SID: str = ""
+    TWILIO_API_KEY_SECRET: str = ""
+    TWILIO_PHONE_NUMBER: str = ""
+    # Public base URL Twilio will hit for webhooks (must be HTTPS in prod).
+    TWILIO_PUBLIC_BASE_URL: str = "http://localhost:8000"
+    # If set, /telephony/webhooks/voice returns TwiML that dials the LiveKit
+    # SIP gateway, bridging the PSTN leg into the AI agent's room.
+    # Example: "sip.livekit.cloud" or "<region>.sip.livekit.cloud".
+    LIVEKIT_SIP_URI: str = ""
+    # When False (dev), webhook signature validation is skipped.
+    TWILIO_VALIDATE_SIGNATURE: bool = True
+    # Default per-call timeouts.
+    TWILIO_DIAL_TIMEOUT_SECONDS: int = 30
+    TWILIO_CALL_RECORD: bool = False
+    TWILIO_MAX_RETRIES: int = 2
+    TWILIO_RETRY_BACKOFF_SECONDS: float = 5.0
+    # Outbound caller-ID name shown on supported carriers.
+    TWILIO_CALLER_ID_NAME: str = "Aifficient"
+
     # Logging
     LOG_LEVEL: str = "INFO"
     LOG_JSON: bool = False

@@ -32,6 +32,15 @@ class SpeakResponse(BaseModel):
         default=False,
         description="True when the request was queued as a background task.",
     )
+    stages: dict[str, int] | None = Field(
+        default=None,
+        description=(
+            "Per-stage timing breakdown in milliseconds (token_mint_ms, "
+            "connect_ms, ttfb_ms, first_frame_pub_ms, stream_end_ms, "
+            "playout_wait_ms, disconnect_ms, total_ms). Present only on "
+            "synchronous (wait=true) requests."
+        ),
+    )
 
 
 class Voice(BaseModel):
