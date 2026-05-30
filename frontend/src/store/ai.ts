@@ -26,6 +26,7 @@ type Status = "idle" | "sending" | "finalizing";
 
 type AIStore = {
   callId: string | null;
+  playbookId: string | null;
   persona: string | null;
   framework: QualificationFramework;
 
@@ -39,6 +40,7 @@ type AIStore = {
   // ----- lifecycle -----
   start: (opts: {
     callId: string;
+    playbookId?: string;
     persona?: string;
     framework?: QualificationFramework;
   }) => void;
@@ -59,6 +61,7 @@ function uid(): string {
 
 export const useAI = create<AIStore>((set, get) => ({
   callId: null,
+  playbookId: null,
   persona: null,
   framework: "BANT",
 
@@ -69,9 +72,10 @@ export const useAI = create<AIStore>((set, get) => ({
   qualification: null,
   summary: null,
 
-  start({ callId, persona, framework }) {
+  start({ callId, playbookId, persona, framework }) {
     set({
       callId,
+      playbookId: playbookId ?? null,
       persona: persona ?? null,
       framework: framework ?? "BANT",
       status: "idle",
@@ -85,6 +89,7 @@ export const useAI = create<AIStore>((set, get) => ({
   reset() {
     set({
       callId: null,
+      playbookId: null,
       persona: null,
       framework: "BANT",
       status: "idle",
@@ -97,7 +102,7 @@ export const useAI = create<AIStore>((set, get) => ({
 
   async send(userInput) {
     const trimmed = userInput.trim();
-    const { callId, persona, framework, status } = get();
+    const { callId, playbookId, persona, framework, status } = get();
     if (!trimmed || !callId || status !== "idle") return null;
 
     const userBubble: ChatBubble = {
@@ -116,6 +121,7 @@ export const useAI = create<AIStore>((set, get) => ({
       const result = await converse({
         call_id: callId,
         user_input: trimmed,
+        playbook_id: playbookId ?? undefined,
         persona: persona ?? undefined,
         qualification_framework: framework,
         persist_transcript: true,

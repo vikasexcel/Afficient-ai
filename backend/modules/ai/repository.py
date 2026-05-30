@@ -30,6 +30,8 @@ class AICallRepository:
         persona: str | None,
         framework: str | None,
         extra: dict[str, Any] | None = None,
+        playbook_id: uuid.UUID | None = None,
+        playbook_version: int | None = None,
     ) -> AICall:
         row = (
             db.query(AICall).filter(AICall.call_id == call_id).one_or_none()
@@ -41,6 +43,8 @@ class AICallRepository:
                 created_by=created_by,
                 persona=persona,
                 framework=framework,
+                playbook_id=playbook_id,
+                playbook_version=playbook_version,
                 status="active",
                 extra=extra,
             )
@@ -49,6 +53,10 @@ class AICallRepository:
             return row
         row.persona = persona or row.persona
         row.framework = framework or row.framework
+        if playbook_id is not None:
+            row.playbook_id = playbook_id
+        if playbook_version is not None:
+            row.playbook_version = playbook_version
         if extra is not None:
             merged = dict(row.extra or {})
             merged.update(extra)

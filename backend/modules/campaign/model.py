@@ -33,9 +33,12 @@ class Campaign(
         String(255)
     )
 
-    status: Mapped[
-        str
-    ] = mapped_column(
+    status: Mapped[str] = mapped_column(
         String(50),
         default="draft",
+    )
+    playbook_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("playbooks.id"),
+        nullable=True,
+        index=True,
     )

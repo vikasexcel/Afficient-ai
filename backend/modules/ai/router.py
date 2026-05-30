@@ -27,6 +27,10 @@ from common.security.roles import Role
 from database.dependencies import get_db
 from modules.ai.dependencies import get_ai_service
 from modules.ai.exceptions import AIError
+from modules.ai.interruption import (
+    InterruptionLog,
+    read_metrics_snapshot,
+)
 from modules.ai.repository import (
     AICallRepository,
     AICallSummaryRepository,
@@ -138,6 +142,7 @@ async def converse(
             call_id=data.call_id,
             persona=data.persona,
             framework=data.qualification_framework,
+            playbook_id=data.playbook_id,
             organization_id=org_id,
             created_by=user_id,
             extra_context=data.extra_context,
@@ -306,14 +311,23 @@ async def list_calls(
     org = _tenant_org_id(tenant)
     rows = AICallRepository.list_recent(db, organization_id=org, limit=limit)
 
+    from modules.playbook.model import Playbook
+
     entries: list[CallListEntry] = []
     for r in rows:
         summary = AICallSummaryRepository.get(db, r.call_id)
+        playbook_name = None
+        if r.playbook_id:
+            pb = db.get(Playbook, r.playbook_id)
+            playbook_name = pb.name if pb else None
         entries.append(
             CallListEntry(
                 call_id=r.call_id,
                 persona=r.persona,
                 framework=r.framework,
+                playbook_id=str(r.playbook_id) if r.playbook_id else None,
+                playbook_name=playbook_name,
+                playbook_version=r.playbook_version,
                 status=r.status,
                 created_at=r.created_at.replace(tzinfo=timezone.utc)
                 if r.created_at.tzinfo is None
@@ -334,6 +348,34 @@ async def list_calls(
 # ---------------------------------------------------------------------------
 # Personas (read-only listing)
 # ---------------------------------------------------------------------------
+
+
+@router.get("/calls/{call_id}/interruptions")
+async def list_interruptions(
+    call_id: str,
+    tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
+    svc: AIService = Depends(get_ai_service),
+):
+    """Return the in-call barge-in event log + live metrics snapshot.
+
+    Sourced from Redis (the orchestrator writes both lists during the
+    call). After ``finalize_call`` clears memory these reads will return
+    empty; in the future we can mirror events to Postgres if long-term
+    history is required.
+    """
+
+    log_store = InterruptionLog(svc.memory)
+    try:
+        events = await log_store.list_for_call(call_id)
+        snapshot = await read_metrics_snapshot(svc.memory, call_id=call_id)
+    except AIError as exc:
+        raise _to_http(exc) from exc
+
+    return {
+        "call_id": call_id,
+        "metrics": snapshot,
+        "events": [e.to_dict() for e in events],
+    }
 
 
 @router.get("/personas")

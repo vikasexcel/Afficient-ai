@@ -43,6 +43,7 @@ class InitiateCallRequest(BaseModel):
     campaign_id: uuid.UUID | None = None
 
     # Agent / conversation knobs forwarded to the orchestrator.
+    playbook_id: uuid.UUID | None = None
     persona: str | None = Field(default=None, max_length=64)
     qualification_framework: str | None = Field(default=None, max_length=16)
     opening_line: str | None = Field(default=None, max_length=2000)

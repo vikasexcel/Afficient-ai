@@ -10,6 +10,7 @@ Two layers:
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -81,7 +82,11 @@ class ConverseRequest(BaseModel):
         max_length=64,
         description="Named system prompt (see modules.ai.prompts). Defaults to settings.AI_DEFAULT_PERSONA.",
     )
-    qualification_framework: Literal["BANT", "MEDDICC"] | None = None
+    qualification_framework: Literal["BANT", "MEDDICC", "CUSTOM"] | None = None
+    playbook_id: uuid.UUID | None = Field(
+        default=None,
+        description="Active playbook to drive prompts + qualification.",
+    )
     persist_transcript: bool = True
     extra_context: dict[str, Any] | None = Field(
         default=None,
@@ -111,7 +116,7 @@ class ConverseResponse(BaseModel):
 
 
 class QualificationSnapshot(BaseModel):
-    framework: Literal["BANT", "MEDDICC"]
+    framework: Literal["BANT", "MEDDICC", "CUSTOM"]
     status: Literal["not_started", "in_progress", "qualified", "disqualified"]
     score: int = Field(ge=0, le=100)
     answered_fields: list[str] = Field(default_factory=list)
@@ -162,6 +167,9 @@ class CallListEntry(BaseModel):
     call_id: str
     persona: str | None
     framework: str | None
+    playbook_id: str | None = None
+    playbook_name: str | None = None
+    playbook_version: int | None = None
     status: str
     created_at: datetime
     updated_at: datetime

@@ -17,9 +17,12 @@ turn. Aim for < 800 tokens of system instructions.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from modules.ai.qualification import QualificationFramework
+
+if TYPE_CHECKING:
+    from modules.playbook.runtime import PlaybookRuntimeConfig
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +182,26 @@ _MEDDICC_BLOCK = (
 )
 
 
-def _qualification_block(framework: QualificationFramework | str | None) -> str:
+def _qualification_block(
+    framework: QualificationFramework | str | None,
+    playbook: PlaybookRuntimeConfig | None = None,
+) -> str:
+    if playbook and playbook.fields:
+        lines = [
+            f"Qualification playbook: {playbook.name} ({playbook.framework}).",
+            "On every turn, silently update your understanding of:",
+        ]
+        for f in sorted(playbook.fields, key=lambda x: x.position):
+            req = " (required)" if f.required else ""
+            desc = f" — {f.description}" if f.description else ""
+            lines.append(
+                f"  - {f.display_name} [{f.key}]{req}{desc}"
+            )
+        lines.append(
+            "Ask at most one qualifying question per turn, woven into the conversation."
+        )
+        return "\n".join(lines)
+
     if framework is None:
         return ""
     fw = (
@@ -214,25 +236,47 @@ def render_system_prompt(
     persona: str | Persona | None = None,
     framework: QualificationFramework | str | None = None,
     extra_context: dict[str, Any] | None = None,
+    playbook: PlaybookRuntimeConfig | None = None,
 ) -> str:
     """Render the final system prompt for a turn.
 
     Missing template keys render as empty strings — this is intentional so
     a misconfigured campaign can't crash a live call.
+
+    When ``playbook.system_prompt`` is set it replaces the persona template
+    entirely; otherwise the persona template is used.
     """
+
+    if playbook is not None:
+        persona = playbook.persona_name
+        framework = playbook.framework
 
     p = persona if isinstance(persona, Persona) else get_persona(persona)
 
     ctx: dict[str, Any] = {**_DEFAULT_CONTEXT}
-    if p.default_objective:
+    if playbook and playbook.default_objective:
+        ctx["objective"] = playbook.default_objective
+    elif p.default_objective:
         ctx["objective"] = p.default_objective
+    if playbook and playbook.default_context:
+        ctx.update(
+            {
+                k: ("" if v is None else str(v))
+                for k, v in playbook.default_context.items()
+            }
+        )
     if extra_context:
         ctx.update({k: ("" if v is None else str(v)) for k, v in extra_context.items()})
 
-    ctx["qualification_block"] = _qualification_block(framework)
+    ctx["qualification_block"] = _qualification_block(framework, playbook)
 
     class _SafeDict(dict):
         def __missing__(self, key: str) -> str:  # noqa: D401 - intentional
             return ""
 
-    return p.template.format_map(_SafeDict(ctx)).strip()
+    template = (
+        playbook.system_prompt
+        if playbook and playbook.system_prompt
+        else p.template
+    )
+    return template.format_map(_SafeDict(ctx)).strip()

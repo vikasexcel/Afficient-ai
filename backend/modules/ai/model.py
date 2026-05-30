@@ -48,6 +48,12 @@ class AICall(BaseModel):
 
     persona: Mapped[str | None] = mapped_column(String(64), nullable=True)
     framework: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    playbook_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("playbooks.id"),
+        nullable=True,
+        index=True,
+    )
+    playbook_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="active")
     extra: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 

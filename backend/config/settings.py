@@ -77,6 +77,52 @@ class Settings(BaseSettings):
     AI_QUALIFICATION_FRAMEWORK: str = "BANT"  # or MEDDICC
     AI_DEFAULT_PERSONA: str = "outbound_sdr"
 
+    # ------------------------------------------------------------------
+    # Interruption / recovery (barge-in pipeline)
+    # ------------------------------------------------------------------
+
+    # Use a Deepgram PARTIAL transcript with non-empty text as a *second*
+    # barge-in trigger (in addition to SPEECH_STARTED). Improves
+    # detection latency on carriers where VAD events are slow.
+    BARGE_IN_ON_PARTIAL: bool = True
+    # Minimum characters in a PARTIAL to count as user speech (filters
+    # noise-driven false positives). Effective only when BARGE_IN_ON_PARTIAL.
+    BARGE_IN_PARTIAL_MIN_CHARS: int = 2
+    # Throttle: don't fire two barge-ins within this window (ms).
+    BARGE_IN_COOLDOWN_MS: int = 250
+    # Number of interruption events to keep per call in Redis (FIFO).
+    BARGE_IN_MAX_EVENTS_PER_CALL: int = 200
+    # Text the agent speaks after entering RECOVERY because the LLM
+    # failed irrecoverably for one turn.
+    AI_RECOVERY_LLM_FALLBACK_TEXT: str = (
+        "Sorry, I had a brief issue on my end. Could you say that again?"
+    )
+    # Text the agent speaks after a STT/TTS recovery so the lead doesn't
+    # think the line dropped silently.
+    AI_RECOVERY_PIPELINE_FALLBACK_TEXT: str = (
+        "Apologies — I lost you for a moment. I'm back now, please go ahead."
+    )
+
+    # Per-turn retry policy for the LLM (independent of OpenAI SDK retries
+    # which only cover transport errors; this layer adds backoff between
+    # full HTTP attempts on rate limit / timeout / 5xx).
+    AI_TURN_MAX_ATTEMPTS: int = 3
+    AI_TURN_RETRY_BACKOFF_SECONDS: float = 0.4
+    AI_TURN_TIMEOUT_SECONDS: float = 12.0
+
+    # Deepgram socket reconnect.
+    STT_MAX_RECONNECT_ATTEMPTS: int = 3
+    STT_RECONNECT_BACKOFF_SECONDS: float = 0.5
+
+    # ElevenLabs retry per utterance.
+    TTS_MAX_ATTEMPTS: int = 2
+    TTS_RETRY_BACKOFF_SECONDS: float = 0.3
+
+    # LiveKit reconnect (we only attempt this once: a second failure
+    # almost always means the room was destroyed).
+    LIVEKIT_RECONNECT_ATTEMPTS: int = 1
+    LIVEKIT_RECONNECT_BACKOFF_SECONDS: float = 1.0
+
     # Twilio PSTN
     # Account SID (AC...) — always required. Find it on the Twilio
     # console homepage; it is not a secret.

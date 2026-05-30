@@ -6,7 +6,7 @@ import { api } from "./auth";
 
 export type MessageRole = "system" | "user" | "assistant" | "tool";
 
-export type QualificationFramework = "BANT" | "MEDDICC";
+export type QualificationFramework = "BANT" | "MEDDICC" | "CUSTOM";
 
 export type QualificationStatus =
   | "not_started"
@@ -60,6 +60,7 @@ export type ConverseInput = {
   user_input: string;
   persona?: string;
   qualification_framework?: QualificationFramework;
+  playbook_id?: string;
   persist_transcript?: boolean;
   extra_context?: Record<string, unknown>;
 };
@@ -150,6 +151,9 @@ export type CallListEntry = {
   call_id: string;
   persona: string | null;
   framework: string | null;
+  playbook_id: string | null;
+  playbook_name: string | null;
+  playbook_version: number | null;
   status: string;
   created_at: string;
   updated_at: string;

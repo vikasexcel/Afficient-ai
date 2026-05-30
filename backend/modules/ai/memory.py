@@ -183,6 +183,13 @@ class ConversationMemory:
     # Qualification
     # ------------------------------------------------------------------
 
+    async def has_qualification(self, call_id: str) -> bool:
+        try:
+            blob = await self._r.get(_key(call_id, _QUAL_FIELD))
+            return bool(blob)
+        except Exception:
+            return False
+
     async def get_qualification(
         self,
         call_id: str,
@@ -256,7 +263,15 @@ class ConversationMemory:
             except Exception:
                 qual = QualificationTracker.empty(framework)
         else:
-            qual = QualificationTracker.empty(framework)
+            from modules.playbook.runtime import PlaybookRuntimeConfig
+
+            playbook = PlaybookRuntimeConfig.from_meta(meta)
+            if playbook and playbook.fields:
+                qual = QualificationTracker.empty_from_playbook(
+                    playbook, framework
+                )
+            else:
+                qual = QualificationTracker.empty(framework)
 
         return CallMemorySnapshot(
             call_id=call_id,

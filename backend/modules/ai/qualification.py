@@ -33,6 +33,7 @@ from modules.ai.schema import QualificationSnapshot
 class QualificationFramework(str, Enum):
     BANT = "BANT"
     MEDDICC = "MEDDICC"
+    CUSTOM = "CUSTOM"
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +108,14 @@ _MEDDICC_CUES: dict[str, list[str]] = {
 _CUES: dict[QualificationFramework, dict[str, list[str]]] = {
     QualificationFramework.BANT: _BANT_CUES,
     QualificationFramework.MEDDICC: _MEDDICC_CUES,
+    QualificationFramework.CUSTOM: {},
 }
+
+
+_DEFAULT_DISQUALIFIERS = [
+    r"\b(remove me|do not call|do(?:n'?t)? call (me )?again|"
+    r"not interested|stop calling|take me off|unsubscribe)\b",
+]
 
 
 # Status thresholds: ratio of (answered fields / total fields)
@@ -121,6 +129,16 @@ _IN_PROGRESS_RATIO = 0.01
 
 
 @dataclass
+class FieldConfig:
+    """Per-field qualification config (from playbook or defaults)."""
+
+    key: str
+    weight: int = 1
+    required: bool = False
+    cue_patterns: list[str] = field(default_factory=list)
+
+
+@dataclass
 class QualificationState:
     """In-memory state for one call's qualification progress.
 
@@ -131,6 +149,8 @@ class QualificationState:
 
     framework: QualificationFramework = QualificationFramework.BANT
     fields: dict[str, str | None] = field(default_factory=dict)
+    field_configs: dict[str, FieldConfig] = field(default_factory=dict)
+    disqualifying_patterns: list[str] = field(default_factory=list)
     last_updated: datetime | None = None
     disqualified: bool = False
     disqualification_reason: str | None = None
@@ -140,7 +160,25 @@ class QualificationState:
     # ------------------------------------------------------------------
 
     def all_field_names(self) -> list[str]:
-        return list(_CUES[self.framework].keys())
+        if self.field_configs:
+            return list(self.field_configs.keys())
+        return list(_CUES.get(self.framework, {}).keys())
+
+    def _cue_map(self) -> dict[str, list[str]]:
+        """Resolve regex patterns per field (playbook overrides + defaults)."""
+
+        names = self.all_field_names()
+        out: dict[str, list[str]] = {}
+        defaults = _CUES.get(self.framework, {})
+        for name in names:
+            cfg = self.field_configs.get(name)
+            if cfg and cfg.cue_patterns:
+                out[name] = cfg.cue_patterns
+            elif name in defaults:
+                out[name] = defaults[name]
+            else:
+                out[name] = []
+        return out
 
     def _ensure_keys(self) -> None:
         for k in self.all_field_names():
@@ -154,25 +192,20 @@ class QualificationState:
             return []
 
         lower = text.lower()
-        # Disqualification cues short-circuit everything.
-        if re.search(
-            r"\b(remove me|do not call|do(?:n'?t)? call (me )?again|"
-            r"not interested|stop calling|take me off|unsubscribe)\b",
-            lower,
-        ):
-            self.disqualified = True
-            self.disqualification_reason = "explicit opt-out"
-            self.last_updated = datetime.now(timezone.utc)
-            return ["__disqualified__"]
+        patterns = self.disqualifying_patterns or _DEFAULT_DISQUALIFIERS
+        for pat in patterns:
+            if re.search(pat, lower):
+                self.disqualified = True
+                self.disqualification_reason = "explicit opt-out"
+                self.last_updated = datetime.now(timezone.utc)
+                return ["__disqualified__"]
 
         newly_set: list[str] = []
         snippet = text.strip()[:240]
-        for field_name, patterns in _CUES[self.framework].items():
+        for field_name, pats in self._cue_map().items():
             if self.fields.get(field_name):
-                # We already have a snippet — keep the earliest for stability,
-                # but extend it if the new snippet adds materially (rare).
                 continue
-            for pat in patterns:
+            for pat in pats:
                 if re.search(pat, lower):
                     self.fields[field_name] = snippet
                     newly_set.append(field_name)
@@ -198,16 +231,39 @@ class QualificationState:
         names = self.all_field_names()
         if not names:
             return 0
+        if self.field_configs:
+            total_weight = sum(
+                self.field_configs.get(k, FieldConfig(key=k)).weight
+                for k in names
+            )
+            if total_weight <= 0:
+                return 0
+            answered_weight = sum(
+                self.field_configs.get(k, FieldConfig(key=k)).weight
+                for k in self.answered_fields()
+            )
+            return int(round(100 * answered_weight / total_weight))
         return int(round(100 * len(self.answered_fields()) / len(names)))
 
     def status(self) -> str:
         if self.disqualified:
             return "disqualified"
-        ratio = (
-            len(self.answered_fields()) / len(self.all_field_names())
-            if self.all_field_names()
-            else 0.0
-        )
+        names = self.all_field_names()
+        if not names:
+            return "not_started"
+        answered = len(self.answered_fields())
+        ratio = answered / len(names)
+        if self.field_configs:
+            required_missing = [
+                k
+                for k, cfg in self.field_configs.items()
+                if cfg.required and not self.fields.get(k)
+            ]
+            if ratio >= _QUALIFIED_RATIO and not required_missing:
+                return "qualified"
+            if ratio >= _IN_PROGRESS_RATIO or answered > 0:
+                return "in_progress"
+            return "not_started"
         if ratio >= _QUALIFIED_RATIO:
             return "qualified"
         if ratio >= _IN_PROGRESS_RATIO:
@@ -235,6 +291,16 @@ class QualificationState:
             {
                 "framework": self.framework.value,
                 "fields": self.fields,
+                "field_configs": {
+                    k: {
+                        "key": v.key,
+                        "weight": v.weight,
+                        "required": v.required,
+                        "cue_patterns": v.cue_patterns,
+                    }
+                    for k, v in self.field_configs.items()
+                },
+                "disqualifying_patterns": self.disqualifying_patterns,
                 "last_updated": (
                     self.last_updated.isoformat() if self.last_updated else None
                 ),
@@ -246,11 +312,27 @@ class QualificationState:
     @classmethod
     def from_json(cls, blob: str) -> "QualificationState":
         data = json.loads(blob)
-        fw = QualificationFramework(data.get("framework", "BANT"))
+        fw_raw = data.get("framework", "BANT")
+        try:
+            fw = QualificationFramework(fw_raw)
+        except ValueError:
+            fw = QualificationFramework.BANT
         last = data.get("last_updated")
+        configs_raw = data.get("field_configs") or {}
+        field_configs = {
+            k: FieldConfig(
+                key=v.get("key", k),
+                weight=int(v.get("weight", 1)),
+                required=bool(v.get("required", False)),
+                cue_patterns=list(v.get("cue_patterns") or []),
+            )
+            for k, v in configs_raw.items()
+        }
         return cls(
             framework=fw,
             fields=data.get("fields", {}),
+            field_configs=field_configs,
+            disqualifying_patterns=list(data.get("disqualifying_patterns") or []),
             last_updated=datetime.fromisoformat(last) if last else None,
             disqualified=bool(data.get("disqualified", False)),
             disqualification_reason=data.get("disqualification_reason"),
@@ -280,7 +362,45 @@ class QualificationTracker:
                 else QualificationFramework.BANT
             )
         )
-        return QualificationState(framework=fw, fields={k: None for k in _CUES[fw]})
+        keys = _CUES.get(fw, {})
+        return QualificationState(
+            framework=fw,
+            fields={k: None for k in keys},
+        )
+
+    @staticmethod
+    def empty_from_playbook(
+        playbook: Any,
+        framework: QualificationFramework | str | None = None,
+    ) -> QualificationState:
+        """Build qualification state from a :class:`PlaybookRuntimeConfig`."""
+
+        from modules.playbook.runtime import PlaybookRuntimeConfig
+
+        if not isinstance(playbook, PlaybookRuntimeConfig):
+            raise TypeError("playbook must be PlaybookRuntimeConfig")
+
+        fw_raw = playbook.framework
+        try:
+            fw = QualificationFramework(fw_raw)
+        except ValueError:
+            fw = QualificationFramework.CUSTOM
+
+        field_configs = {
+            f.key: FieldConfig(
+                key=f.key,
+                weight=f.weight,
+                required=f.required,
+                cue_patterns=list(f.cue_patterns),
+            )
+            for f in playbook.fields
+        }
+        return QualificationState(
+            framework=fw,
+            fields={f.key: None for f in playbook.fields},
+            field_configs=field_configs,
+            disqualifying_patterns=list(playbook.disqualifying_patterns),
+        )
 
     @staticmethod
     def supported() -> Iterable[QualificationFramework]:

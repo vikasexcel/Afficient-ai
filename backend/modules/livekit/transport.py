@@ -196,6 +196,42 @@ class AudioTransport:
         except Exception:
             log.exception("livekit.transport.wait_for_playout_failed")
 
+    def clear_audio_buffer(self) -> int:
+        """Drop every PCM frame still queued on the local AudioSource.
+
+        Critical for barge-in: cancelling the TTS pump only stops *new*
+        frames from being submitted; the LiveKit ``AudioSource`` still
+        plays out whatever it already has queued (~hundreds of ms). This
+        method drains that queue immediately so the agent goes silent
+        within one RTC round-trip after the user starts speaking.
+
+        Returns the number of milliseconds of audio that was dropped (0
+        if nothing was queued or the source doesn't expose the API).
+        """
+
+        source = self._state.source
+        if source is None:
+            return 0
+        # `queued_duration` returns seconds (float) in the livekit-rtc
+        # Python SDK; convert to ms for caller convenience.
+        queued_ms = 0
+        try:
+            queued_seconds = getattr(source, "queued_duration", 0.0) or 0.0
+            queued_ms = int(queued_seconds * 1000)
+        except Exception:  # pragma: no cover — defensive
+            queued_ms = 0
+        try:
+            source.clear_queue()
+        except Exception:
+            log.exception("livekit.transport.clear_queue_failed")
+            return 0
+        if queued_ms > 0:
+            log.info(
+                "livekit.transport.audio_buffer_cleared",
+                queued_ms=queued_ms,
+            )
+        return queued_ms
+
     # ------------------------------------------------------------------
     # Inbound audio
     # ------------------------------------------------------------------

@@ -28,6 +28,9 @@ from modules.livekit.transport import AudioTransport
 from modules.tts.elevenlabs_client import ElevenLabsTTS
 from modules.tts.exceptions import TTSStreamError
 
+# `InterruptResult` is forward-declared below; the import block stays
+# import-cycle-safe because modules.ai.recovery is imported lazily.
+
 log = get_logger("tts.streamer")
 
 
@@ -249,25 +252,49 @@ class TTSStreamer:
         voice_id: str | None,
         model_id: str | None,
     ) -> PumpStats:
+        """Bridge ElevenLabs PCM into the LiveKit room with one retry on
+        upstream failure *before any audio has been published*.
+
+        If the provider fails mid-utterance the lead has already heard
+        the leading half of the sentence — re-trying would either replay
+        that audio (bad) or start a new sentence (worse). In that case
+        we surface :class:`TTSStreamError` so the orchestrator can speak
+        a recovery line instead.
+        """
+
+        from modules.ai.recovery import RetryPolicy, with_retry  # avoid cycle
+
         bytes_per_frame = (self._tts.sample_rate * _FRAME_MS // 1000) * 2  # s16le
         samples_per_frame = bytes_per_frame // 2
-
-        buf = bytearray()
-        total = 0
         pump_start = time.monotonic()
-        ttfb_ms = -1
-        first_frame_pub_ms = -1
-        try:
-            async for chunk in self._tts.stream_pcm(
-                text, voice_id=voice_id, model_id=model_id
-            ):
-                if ttfb_ms < 0 and chunk:
-                    ttfb_ms = int((time.monotonic() - pump_start) * 1000)
-                buf.extend(chunk)
-                total += len(chunk)
-                while len(buf) >= bytes_per_frame:
-                    frame = bytes(buf[:bytes_per_frame])
-                    del buf[:bytes_per_frame]
+
+        async def _one_attempt() -> PumpStats:
+            buf = bytearray()
+            total = 0
+            ttfb_ms = -1
+            first_frame_pub_ms = -1
+            try:
+                async for chunk in self._tts.stream_pcm(
+                    text, voice_id=voice_id, model_id=model_id
+                ):
+                    if ttfb_ms < 0 and chunk:
+                        ttfb_ms = int((time.monotonic() - pump_start) * 1000)
+                    buf.extend(chunk)
+                    total += len(chunk)
+                    while len(buf) >= bytes_per_frame:
+                        frame = bytes(buf[:bytes_per_frame])
+                        del buf[:bytes_per_frame]
+                        await transport.publish_audio(
+                            frame, samples_per_channel=samples_per_frame
+                        )
+                        if first_frame_pub_ms < 0:
+                            first_frame_pub_ms = int(
+                                (time.monotonic() - pump_start) * 1000
+                            )
+
+                if buf:
+                    pad = bytes_per_frame - len(buf)
+                    frame = bytes(buf) + (b"\x00" * pad)
                     await transport.publish_audio(
                         frame, samples_per_channel=samples_per_frame
                     )
@@ -276,31 +303,44 @@ class TTSStreamer:
                             (time.monotonic() - pump_start) * 1000
                         )
 
-            # Flush a final partial frame, padded with silence so the listener
-            # doesn't hear the buffer cut mid-sample.
-            if buf:
-                pad = bytes_per_frame - len(buf)
-                frame = bytes(buf) + (b"\x00" * pad)
-                await transport.publish_audio(
-                    frame, samples_per_channel=samples_per_frame
-                )
-                if first_frame_pub_ms < 0:
-                    first_frame_pub_ms = int(
-                        (time.monotonic() - pump_start) * 1000
-                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # If we've already pushed audio this is fatal — bail out
+                # with the partial stats so the caller can record what
+                # was heard before the cut.
+                if first_frame_pub_ms >= 0:
+                    raise TTSStreamError(
+                        f"upstream tts failed mid-utterance: {exc}"
+                    ) from exc
+                # Nothing has played yet — re-raise the raw exception so
+                # the retry policy can decide whether to try again.
+                raise
 
+            stream_end_ms = int((time.monotonic() - pump_start) * 1000)
+            return PumpStats(
+                bytes_streamed=total,
+                ttfb_ms=max(ttfb_ms, 0),
+                first_frame_pub_ms=max(first_frame_pub_ms, 0),
+                stream_end_ms=stream_end_ms,
+            )
+
+        try:
+            return await with_retry(
+                _one_attempt,
+                RetryPolicy(
+                    max_attempts=max(1, settings.TTS_MAX_ATTEMPTS),
+                    base_backoff_seconds=settings.TTS_RETRY_BACKOFF_SECONDS,
+                    retry_on=(TTSStreamError, Exception),
+                ),
+                label="tts.pump",
+            )
         except asyncio.CancelledError:
+            raise
+        except TTSStreamError:
             raise
         except Exception as exc:
             raise TTSStreamError(f"failed to push audio: {exc}") from exc
-
-        stream_end_ms = int((time.monotonic() - pump_start) * 1000)
-        return PumpStats(
-            bytes_streamed=total,
-            ttfb_ms=max(ttfb_ms, 0),
-            first_frame_pub_ms=max(first_frame_pub_ms, 0),
-            stream_end_ms=stream_end_ms,
-        )
 
 
 class BargeInInterrupted(Exception):
@@ -315,14 +355,30 @@ class BargeInInterrupted(Exception):
         self.partial = partial
 
 
+@dataclass
+class InterruptResult:
+    """What :meth:`TTSSession.interrupt` returns.
+
+    ``silence_latency_ms`` is the wall-clock time from the moment
+    ``interrupt()`` was called until the audio buffer was actually
+    cleared and the pump task ended. ``dropped_buffer_ms`` is how much
+    queued PCM had to be discarded from LiveKit's local audio source.
+    """
+
+    silence_latency_ms: int
+    dropped_buffer_ms: int
+    was_speaking: bool
+
+
 class TTSSession:
     """Handle to a long-lived agent connection.
 
     A session can be **interrupted** mid-utterance to support conversational
     barge-in: while :meth:`speak` is running, calling :meth:`interrupt`
-    cancels the active pump task. ``speak`` then raises
-    :class:`BargeInInterrupted` so the orchestrator knows the agent went
-    silent before the planned utterance finished.
+    cancels the active pump task, clears LiveKit's queued PCM, and returns
+    an :class:`InterruptResult` with the silence latency. ``speak`` then
+    raises :class:`BargeInInterrupted` so the orchestrator knows the agent
+    went silent before the planned utterance finished.
     """
 
     def __init__(self, *, streamer: TTSStreamer, transport: AudioTransport) -> None:
@@ -380,22 +436,40 @@ class TTSSession:
             await self._transport.wait_for_playout()
         return stats
 
-    async def interrupt(self) -> None:
+    async def interrupt(self) -> "InterruptResult":
         """Cancel the in-flight :meth:`speak` (barge-in).
 
         Idempotent. Safe to call concurrently with ``speak``; the lock
         protects against double-cancellation when two STT events arrive
-        back-to-back.
+        back-to-back. After cancelling the pump we also tell the
+        underlying LiveKit AudioSource to drop any frames it still has
+        queued so the lead hears silence *immediately* rather than a
+        few hundred ms of trailing audio.
+
+        Returns an :class:`InterruptResult`. Always returns a result even
+        if there was nothing to interrupt — the orchestrator records the
+        no-op into its metrics so we can detect spurious VAD events.
         """
 
+        t0 = time.monotonic()
         async with self._interrupt_lock:
             task = self._current_task
-            if task is None or task.done():
-                return
-            self._interrupted = True
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, BargeInInterrupted, Exception):
-                # Whatever the pump raised, we just want it gone.
-                pass
+            was_speaking = task is not None and not task.done()
+            if was_speaking:
+                self._interrupted = True
+                task.cancel()  # type: ignore[union-attr]
+                try:
+                    await task  # type: ignore[arg-type]
+                except (asyncio.CancelledError, BargeInInterrupted, Exception):
+                    # Whatever the pump raised, we just want it gone.
+                    pass
+            # Always clear the local AudioSource queue — even if there
+            # was no in-flight speak the buffer may still hold the tail
+            # of a previous utterance.
+            dropped_buffer_ms = self._transport.clear_audio_buffer()
+            silence_latency_ms = int((time.monotonic() - t0) * 1000)
+            return InterruptResult(
+                silence_latency_ms=silence_latency_ms,
+                dropped_buffer_ms=dropped_buffer_ms,
+                was_speaking=was_speaking,
+            )

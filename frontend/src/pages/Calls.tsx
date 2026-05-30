@@ -25,7 +25,7 @@ import { useMe } from "@/store/me";
 import { useLiveKit, type ParticipantInfo } from "@/store/livekit";
 import { useAI, type ChatBubble } from "@/store/ai";
 import { transcribe, type TranscriptEvent } from "@/services/stt";
-import { listPersonas, type Persona } from "@/services/ai";
+import { listPlaybooks, type PlaybookSummary } from "@/services/playbook";
 import {
   cancelCall,
   initiateCall,
@@ -61,16 +61,17 @@ export default function Calls() {
   const aiReset = useAI((s) => s.reset);
 
   const [draftRoom, setDraftRoom] = useState<string>(defaultRoomName());
-  const [persona, setPersona] = useState<string>("outbound_sdr");
-  const [personas, setPersonas] = useState<Persona[]>([]);
+  const [playbookId, setPlaybookId] = useState<string>("");
+  const [playbooks, setPlaybooks] = useState<PlaybookSummary[]>([]);
   const [mode, setMode] = useState<"browser" | "phone">("browser");
 
   useEffect(() => {
-    listPersonas()
-      .then(setPersonas)
-      .catch(() => {
-        // optional — falls back to the default persona without UI noise.
-      });
+    listPlaybooks(true)
+      .then((rows) => {
+        setPlaybooks(rows);
+        if (rows.length > 0) setPlaybookId(rows[0].id);
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -102,7 +103,7 @@ export default function Calls() {
         identity,
         displayName: me?.full_name || identity,
       });
-      aiStart({ callId: name, persona, framework: "BANT" });
+      aiStart({ callId: name, playbookId: playbookId || undefined });
       toast.success(`Joined ${name}`);
     } catch (err) {
       const message =
@@ -170,9 +171,9 @@ export default function Calls() {
               disabled={isConnecting}
               connecting={isConnecting}
               error={error}
-              persona={persona}
-              onPersonaChange={setPersona}
-              personas={personas}
+              persona={playbookId}
+              onPersonaChange={setPlaybookId}
+              personas={playbooks}
             />
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-5 items-start">
@@ -188,9 +189,9 @@ export default function Calls() {
           )
         ) : (
           <PhoneDialerSection
-            personas={personas}
-            defaultPersona={persona}
-            onPersonaChange={setPersona}
+            playbooks={playbooks}
+            defaultPlaybookId={playbookId}
+            onPlaybookChange={setPlaybookId}
           />
         )}
       </div>
@@ -221,7 +222,7 @@ function JoinForm({
   error: string | null;
   persona: string;
   onPersonaChange: (v: string) => void;
-  personas: Persona[];
+  personas: PlaybookSummary[];
 }) {
   return (
     <div className="bg-white/[0.03] border border-white/[0.07] rounded-[12px] p-6 max-w-2xl">
@@ -236,7 +237,7 @@ function JoinForm({
       />
 
       <label className="block text-[11px] font-medium text-white/40 tracking-wide mt-5 mb-2">
-        AI persona
+        Playbook
       </label>
       <select
         value={persona}
@@ -244,11 +245,11 @@ function JoinForm({
         className="w-full bg-white/[0.04] border border-white/[0.09] focus:border-violet-500/50 focus:ring-2 focus:ring-violet-500/10 rounded-[8px] px-3 py-2.5 text-[13px] text-white outline-none transition-all"
       >
         {personas.length === 0 ? (
-          <option value="outbound_sdr">Outbound SDR (default)</option>
+          <option value="">No active playbooks</option>
         ) : (
           personas.map((p) => (
-            <option key={p.name} value={p.name}>
-              {p.name.replace(/_/g, " ")} — {p.description}
+            <option key={p.id} value={p.id}>
+              {p.name} ({p.framework})
             </option>
           ))
         )}
@@ -641,13 +642,13 @@ function AIAssistantPanel() {
 // ---------------------------------------------------------------------------
 
 function PhoneDialerSection({
-  personas,
-  defaultPersona,
-  onPersonaChange,
+  playbooks,
+  defaultPlaybookId,
+  onPlaybookChange,
 }: {
-  personas: Persona[];
-  defaultPersona: string;
-  onPersonaChange: (v: string) => void;
+  playbooks: PlaybookSummary[];
+  defaultPlaybookId: string;
+  onPlaybookChange: (v: string) => void;
 }) {
   const [calls, setCalls] = useState<TelephonyCall[]>([]);
   const [loading, setLoading] = useState(false);
@@ -689,9 +690,9 @@ function PhoneDialerSection({
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[420px_1fr] gap-5 items-start">
       <DialerForm
-        personas={personas}
-        defaultPersona={defaultPersona}
-        onPersonaChange={onPersonaChange}
+        playbooks={playbooks}
+        defaultPlaybookId={defaultPlaybookId}
+        onPlaybookChange={onPlaybookChange}
         onPlaced={() => setRefreshTick((t) => t + 1)}
       />
       <RecentPhoneCalls
@@ -704,14 +705,14 @@ function PhoneDialerSection({
 }
 
 function DialerForm({
-  personas,
-  defaultPersona,
-  onPersonaChange,
+  playbooks,
+  defaultPlaybookId,
+  onPlaybookChange,
   onPlaced,
 }: {
-  personas: Persona[];
-  defaultPersona: string;
-  onPersonaChange: (v: string) => void;
+  playbooks: PlaybookSummary[];
+  defaultPlaybookId: string;
+  onPlaybookChange: (v: string) => void;
   onPlaced: () => void;
 }) {
   const [toNumber, setToNumber] = useState("");
@@ -719,13 +720,12 @@ function DialerForm({
   const [opening, setOpening] = useState(
     "Hi, this is Alex from Aifficient — got 30 seconds?"
   );
-  const [persona, setPersona] = useState(defaultPersona);
-  const [framework, setFramework] = useState<"BANT" | "MEDDICC">("BANT");
+  const [playbookId, setPlaybookId] = useState(defaultPlaybookId);
   const [dialing, setDialing] = useState(false);
 
   useEffect(() => {
-    setPersona(defaultPersona);
-  }, [defaultPersona]);
+    setPlaybookId(defaultPlaybookId);
+  }, [defaultPlaybookId]);
 
   const validNumber = /^\+[1-9]\d{6,14}$/.test(toNumber.trim());
 
@@ -740,8 +740,7 @@ function DialerForm({
         to_number: toNumber.trim(),
         lead_name: leadName.trim() || undefined,
         opening_line: opening.trim() || undefined,
-        persona,
-        qualification_framework: framework,
+        playbook_id: playbookId || undefined,
       });
       toast.success(
         `Dialing ${call.to_number} — sid ${call.call_sid ?? "(pending)"}`
@@ -810,44 +809,27 @@ function DialerForm({
         className="w-full bg-white/[0.04] border border-white/[0.09] focus:border-violet-500/50 focus:ring-2 focus:ring-violet-500/10 rounded-[8px] px-3 py-2.5 text-[13px] text-white placeholder-white/20 outline-none transition-all resize-none"
       />
 
-      <div className="grid grid-cols-2 gap-3 mt-4">
-        <div>
-          <label className="block text-[11px] font-medium text-white/40 tracking-wide mb-1.5">
-            Persona
-          </label>
-          <select
-            value={persona}
-            onChange={(e) => {
-              setPersona(e.target.value);
-              onPersonaChange(e.target.value);
-            }}
-            className="w-full bg-white/[0.04] border border-white/[0.09] focus:border-violet-500/50 rounded-[8px] px-3 py-2.5 text-[12px] text-white outline-none"
-          >
-            {personas.length === 0 ? (
-              <option value="outbound_sdr">Outbound SDR</option>
-            ) : (
-              personas.map((p) => (
-                <option key={p.name} value={p.name}>
-                  {p.name.replace(/_/g, " ")}
-                </option>
-              ))
-            )}
-          </select>
-        </div>
-        <div>
-          <label className="block text-[11px] font-medium text-white/40 tracking-wide mb-1.5">
-            Framework
-          </label>
-          <select
-            value={framework}
-            onChange={(e) => setFramework(e.target.value as "BANT" | "MEDDICC")}
-            className="w-full bg-white/[0.04] border border-white/[0.09] focus:border-violet-500/50 rounded-[8px] px-3 py-2.5 text-[12px] text-white outline-none"
-          >
-            <option value="BANT">BANT</option>
-            <option value="MEDDICC">MEDDICC</option>
-          </select>
-        </div>
-      </div>
+      <label className="block text-[11px] font-medium text-white/40 tracking-wide mt-4 mb-1.5">
+        Playbook
+      </label>
+      <select
+        value={playbookId}
+        onChange={(e) => {
+          setPlaybookId(e.target.value);
+          onPlaybookChange(e.target.value);
+        }}
+        className="w-full bg-white/[0.04] border border-white/[0.09] focus:border-violet-500/50 rounded-[8px] px-3 py-2.5 text-[12px] text-white outline-none"
+      >
+        {playbooks.length === 0 ? (
+          <option value="">No active playbooks</option>
+        ) : (
+          playbooks.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name} ({p.framework})
+            </option>
+          ))
+        )}
+      </select>
 
       <Button
         onClick={handleDial}

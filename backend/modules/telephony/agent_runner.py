@@ -41,6 +41,7 @@ class CallAgentRunner:
     created_by: uuid.UUID | None = None
     persona: str | None = None
     framework: str | None = None
+    playbook_id: uuid.UUID | None = None
     opening_line: str | None = None
     extra_context: dict | None = None
     target_participant: str | None = None
@@ -139,6 +140,7 @@ class CallAgentRunner:
             target_participant=self.target_participant,
             persona=self.persona,
             framework=self.framework,
+            playbook_id=self.playbook_id,
             extra_context=self.extra_context,
             organization_id=self.organization_id,
             created_by=self.created_by,

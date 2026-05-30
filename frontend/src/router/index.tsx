@@ -11,6 +11,7 @@ import Calls from "@/pages/Calls";
 import Leads from "@/pages/Leads";
 import Analytics from "@/pages/Analytics";
 import Transcripts from "@/pages/Transcripts";
+import Playbooks from "@/pages/Playbooks";
 import Settings from "@/pages/Settings";
 import ProtectedRoute from "@/router/ProtectedRoute";
 
@@ -72,6 +73,15 @@ export const router =
       element: (
         <ProtectedRoute>
           <Analytics />
+        </ProtectedRoute>
+      ),
+    },
+
+    {
+      path: "/playbooks",
+      element: (
+        <ProtectedRoute>
+          <Playbooks />
         </ProtectedRoute>
       ),
     },

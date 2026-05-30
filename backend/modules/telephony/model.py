@@ -107,6 +107,11 @@ class TelephonyCall(BaseModel):
         nullable=True,
         index=True,
     )
+    playbook_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("playbooks.id"),
+        nullable=True,
+        index=True,
+    )
 
     # Timing
     queued_at: Mapped[datetime] = mapped_column(

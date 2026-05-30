@@ -36,6 +36,8 @@ from modules.ai.qualification import (
     QualificationState,
     QualificationTracker,
 )
+from modules.playbook.runtime import PlaybookRuntimeConfig
+from modules.playbook.service import PlaybookService
 from modules.ai.repository import (
     AICallRepository,
     AICallSummaryRepository,
@@ -115,11 +117,24 @@ class AIService:
         call_id: str,
         persona: str | None = None,
         framework: QualificationFramework | str | None = None,
+        playbook_id: uuid.UUID | None = None,
         organization_id: uuid.UUID | None = None,
         created_by: uuid.UUID | None = None,
         extra_context: dict | None = None,
     ) -> CallMemorySnapshot:
         """Initialise (or resume) a call: write Redis meta + the DB row."""
+
+        playbook_runtime: PlaybookRuntimeConfig | None = None
+        if playbook_id and organization_id:
+            playbook_runtime = await asyncio.to_thread(
+                self._load_playbook,
+                organization_id=organization_id,
+                playbook_id=playbook_id,
+            )
+
+        if playbook_runtime:
+            persona = playbook_runtime.persona_name
+            framework = playbook_runtime.framework
 
         fw = self._normalise_framework(framework)
         meta = {
@@ -130,7 +145,14 @@ class AIService:
             "organization_id": str(organization_id) if organization_id else None,
             "created_by": str(created_by) if created_by else None,
         }
+        if playbook_runtime:
+            meta.update(playbook_runtime.to_meta())
+
         await self._memory.set_meta(call_id, meta)
+
+        if playbook_runtime and not await self._has_qualification(call_id):
+            qual = QualificationTracker.empty_from_playbook(playbook_runtime, fw)
+            await self._memory.save_qualification(call_id, qual)
 
         await asyncio.to_thread(
             self._upsert_call_row,
@@ -140,6 +162,8 @@ class AIService:
             persona=meta["persona"],
             framework=fw.value,
             extra=extra_context,
+            playbook_id=playbook_runtime.playbook_id if playbook_runtime else playbook_id,
+            playbook_version=playbook_runtime.version if playbook_runtime else None,
         )
 
         snapshot = await self._memory.snapshot(call_id, framework=fw)
@@ -148,6 +172,7 @@ class AIService:
             call_id=call_id,
             persona=meta["persona"],
             framework=fw.value,
+            playbook_id=str(playbook_runtime.playbook_id) if playbook_runtime else None,
         )
         return snapshot
 
@@ -160,6 +185,8 @@ class AIService:
         persona: str,
         framework: str,
         extra: dict | None,
+        playbook_id: uuid.UUID | None = None,
+        playbook_version: int | None = None,
     ) -> None:
         with _db_scope() as db:
             AICallRepository.upsert_active(
@@ -170,6 +197,8 @@ class AIService:
                 persona=persona,
                 framework=framework,
                 extra=extra,
+                playbook_id=playbook_id,
+                playbook_version=playbook_version,
             )
 
 
@@ -193,16 +222,21 @@ class AIService:
         )
 
         meta = snapshot.meta or {}
+        playbook = PlaybookRuntimeConfig.from_meta(meta)
         effective_persona = persona or meta.get("persona") or settings.AI_DEFAULT_PERSONA
         effective_framework = self._normalise_framework(
             framework or meta.get("framework")
         )
         merged_ctx = {**(meta.get("extra_context") or {}), **(extra_context or {})}
+        if playbook and playbook.default_context:
+            merged_ctx = {**playbook.default_context, **merged_ctx}
 
         # 1. Update qualification from the user turn _before_ the LLM call,
-        #    so the assistant's reply can take the new state into account
-        #    (we re-render the system prompt every turn anyway).
         qual = snapshot.qualification
+        if playbook and not qual.field_configs:
+            qual = QualificationTracker.empty_from_playbook(
+                playbook, effective_framework
+            )
         qual.framework = effective_framework
         qual.ingest_user_turn(user_input)
         await self._memory.save_qualification(call_id, qual)
@@ -212,6 +246,7 @@ class AIService:
             persona=effective_persona,
             framework=effective_framework,
             extra_context=merged_ctx,
+            playbook=playbook,
         )
         messages = build_messages(
             system=system,
@@ -335,13 +370,20 @@ class AIService:
 
         snapshot = await self._memory.snapshot(call_id, framework=framework)
         meta = snapshot.meta or {}
+        playbook = PlaybookRuntimeConfig.from_meta(meta)
         effective_persona = persona or meta.get("persona") or settings.AI_DEFAULT_PERSONA
         effective_framework = self._normalise_framework(
             framework or meta.get("framework")
         )
         merged_ctx = {**(meta.get("extra_context") or {}), **(extra_context or {})}
+        if playbook and playbook.default_context:
+            merged_ctx = {**playbook.default_context, **merged_ctx}
 
         qual = snapshot.qualification
+        if playbook and not qual.field_configs:
+            qual = QualificationTracker.empty_from_playbook(
+                playbook, effective_framework
+            )
         qual.framework = effective_framework
         qual.ingest_user_turn(user_input)
         await self._memory.save_qualification(call_id, qual)
@@ -350,6 +392,7 @@ class AIService:
             persona=effective_persona,
             framework=effective_framework,
             extra_context=merged_ctx,
+            playbook=playbook,
         )
         messages = build_messages(
             system=system,
@@ -562,7 +605,26 @@ class AIService:
             return QualificationFramework(settings.AI_QUALIFICATION_FRAMEWORK)
         if isinstance(framework, QualificationFramework):
             return framework
-        return QualificationFramework(framework)
+        try:
+            return QualificationFramework(framework)
+        except ValueError:
+            return QualificationFramework.CUSTOM
+
+    @staticmethod
+    def _load_playbook(
+        *,
+        organization_id: uuid.UUID,
+        playbook_id: uuid.UUID,
+    ) -> PlaybookRuntimeConfig:
+        with _db_scope() as db:
+            return PlaybookService.resolve_for_call(
+                db,
+                organization_id=organization_id,
+                playbook_id=playbook_id,
+            )
+
+    async def _has_qualification(self, call_id: str) -> bool:
+        return await self._memory.has_qualification(call_id)
 
     @staticmethod
     def _fallback_reply() -> str:

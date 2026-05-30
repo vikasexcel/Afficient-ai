@@ -85,6 +85,7 @@ import { NavLink } from "react-router-dom";
 import {
   LayoutDashboard,
   Megaphone,
+  BookOpen,
   Users,
   PhoneOutgoing,
   BarChart3,
@@ -102,6 +103,7 @@ type Item = {
 const PRIMARY: Item[] = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/campaigns", label: "Campaigns", icon: Megaphone },
+  { to: "/playbooks", label: "Playbooks", icon: BookOpen },
   { to: "/leads", label: "Leads", icon: Users },
   { to: "/calls", label: "Calls", icon: PhoneOutgoing },
 ];

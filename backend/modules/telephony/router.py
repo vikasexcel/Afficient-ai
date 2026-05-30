@@ -196,6 +196,7 @@ async def initiate_call(
             lead_name=data.lead_name,
             lead_phone=data.lead_phone,
             campaign_id=data.campaign_id,
+            playbook_id=data.playbook_id,
             persona=data.persona,
             framework=data.qualification_framework,
             opening_line=data.opening_line,

@@ -18,6 +18,7 @@ from modules.organization.router import router as organization_router
 from modules.stt.router import router as stt_router
 from modules.telephony.dependencies import shutdown_telephony
 from modules.telephony.router import router as telephony_router
+from modules.playbook.router import router as playbook_router
 from modules.tts.router import router as tts_router
 
 
@@ -68,6 +69,7 @@ for r in (
     stt_router,
     ai_router,
     telephony_router,
+    playbook_router,
 ):
     app.include_router(r, prefix=settings.API_PREFIX)
 

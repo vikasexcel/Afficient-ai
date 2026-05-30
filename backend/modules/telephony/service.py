@@ -150,6 +150,7 @@ class TelephonyService:
         lead_name: str | None = None,
         lead_phone: str | None = None,
         campaign_id: uuid.UUID | None = None,
+        playbook_id: uuid.UUID | None = None,
         persona: str | None = None,
         framework: str | None = None,
         opening_line: str | None = None,
@@ -182,6 +183,24 @@ class TelephonyService:
         )
         effective_persona = persona or settings.AI_DEFAULT_PERSONA
         effective_framework = framework or settings.AI_QUALIFICATION_FRAMEWORK
+        effective_opening = opening_line
+        effective_playbook_id = playbook_id
+
+        if playbook_id and organization_id:
+            runtime = await asyncio.to_thread(
+                self._load_playbook,
+                organization_id=organization_id,
+                playbook_id=playbook_id,
+            )
+            effective_persona = runtime.persona_name
+            effective_framework = runtime.framework
+            effective_playbook_id = runtime.playbook_id
+            if not effective_opening and runtime.opening_line:
+                effective_opening = runtime.opening_line
+            extra_context = {
+                **(runtime.default_context or {}),
+                **(extra_context or {}),
+            }
 
         # 1. DB row first so we always have an audit trail.
         row = await asyncio.to_thread(
@@ -197,10 +216,11 @@ class TelephonyService:
             campaign_id=campaign_id,
             persona=effective_persona,
             framework=effective_framework,
-            opening_line=opening_line,
+            opening_line=effective_opening,
             extra_context=extra_context,
             parent_call_id=parent_call_id,
             retry_count=retry_count,
+            playbook_id=effective_playbook_id,
         )
 
         log.info(
@@ -241,7 +261,8 @@ class TelephonyService:
             created_by=created_by,
             persona=effective_persona,
             framework=effective_framework,
-            opening_line=opening_line,
+            playbook_id=effective_playbook_id,
+            opening_line=effective_opening,
             extra_context=self._build_agent_context(
                 lead_name=lead_name,
                 lead_phone=lead_phone or to_number,
@@ -686,6 +707,7 @@ class TelephonyService:
         extra_context: dict | None,
         parent_call_id: uuid.UUID | None,
         retry_count: int,
+        playbook_id: uuid.UUID | None = None,
     ) -> TelephonyCall:
         extra = {
             "persona": persona,
@@ -694,6 +716,8 @@ class TelephonyService:
         }
         if opening_line:
             extra["opening_line"] = opening_line
+        if playbook_id:
+            extra["playbook_id"] = str(playbook_id)
         with _db_scope() as db:
             row = TelephonyCallRepository.create(
                 db,
@@ -706,11 +730,27 @@ class TelephonyService:
                 lead_name=lead_name,
                 lead_phone=lead_phone,
                 campaign_id=campaign_id,
+                playbook_id=playbook_id,
                 extra=extra,
                 parent_call_id=parent_call_id,
                 retry_count=retry_count,
             )
             return _detach_call(db, row)
+
+    @staticmethod
+    def _load_playbook(
+        *,
+        organization_id: uuid.UUID,
+        playbook_id: uuid.UUID,
+    ):
+        from modules.playbook.service import PlaybookService
+
+        with _db_scope() as db:
+            return PlaybookService.resolve_for_call(
+                db,
+                organization_id=organization_id,
+                playbook_id=playbook_id,
+            )
 
     def _bind_inbound_row(
         self,

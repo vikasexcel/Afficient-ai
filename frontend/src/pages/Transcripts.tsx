@@ -102,7 +102,7 @@ export default function Transcripts() {
       (c) =>
         c.call_id.toLowerCase().includes(q) ||
         (c.summary ?? "").toLowerCase().includes(q) ||
-        (c.persona ?? "").toLowerCase().includes(q)
+        (c.playbook_name ?? c.persona ?? "").toLowerCase().includes(q)
     );
   }, [query, calls]);
 
@@ -194,7 +194,9 @@ export default function Transcripts() {
                         <SentimentDot sentiment={sent} />
                       </div>
                       <div className="text-[11px] text-white/45 mt-0.5 truncate">
-                        {c.persona ?? "—"} · {c.framework ?? "BANT"}
+                        {c.playbook_name ?? c.persona ?? "—"} ·{" "}
+                        {c.framework ?? "BANT"}
+                        {c.playbook_version ? ` · v${c.playbook_version}` : ""}
                       </div>
                       <div className="flex items-center gap-3 mt-2 text-[11px] text-white/40">
                         <span className="inline-flex items-center gap-1">
@@ -335,7 +337,9 @@ function TranscriptDetail({
               </span>
             </div>
             <div className="text-[12px] text-white/45 mt-0.5">
-              {call.persona ?? "—"} · {call.framework ?? "BANT"} ·{" "}
+              {call.playbook_name ?? call.persona ?? "—"} ·{" "}
+              {call.framework ?? "BANT"}
+              {call.playbook_version ? ` · v${call.playbook_version}` : ""} ·{" "}
               {call.qualification_status ?? "in progress"}
             </div>
           </div>

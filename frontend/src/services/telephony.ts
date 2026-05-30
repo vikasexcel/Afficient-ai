@@ -65,8 +65,9 @@ export type InitiateCallInput = {
   lead_name?: string;
   lead_phone?: string;
   campaign_id?: string;
+  playbook_id?: string;
   persona?: string;
-  qualification_framework?: "BANT" | "MEDDICC";
+  qualification_framework?: "BANT" | "MEDDICC" | "CUSTOM";
   opening_line?: string;
   extra_context?: Record<string, unknown>;
   record?: boolean;
