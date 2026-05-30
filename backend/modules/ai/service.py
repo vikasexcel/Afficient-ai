@@ -36,6 +36,7 @@ from modules.ai.qualification import (
     QualificationState,
     QualificationTracker,
 )
+from modules.playbook.branches import evaluate_branches, parse_branch_rules
 from modules.playbook.runtime import PlaybookRuntimeConfig
 from modules.playbook.service import PlaybookService
 from modules.ai.repository import (
@@ -83,6 +84,9 @@ class TurnResult:
     stats: ChatTurnStats
     qualification: QualificationSnapshot
     history_length: int
+    branches_fired: list[str] | None = None
+    branch_end_call: bool = False
+    branch_end_call_message: str | None = None
 
 
 
@@ -238,8 +242,44 @@ class AIService:
                 playbook, effective_framework
             )
         qual.framework = effective_framework
-        qual.ingest_user_turn(user_input)
+        newly_set = qual.ingest_user_turn(user_input)
         await self._memory.save_qualification(call_id, qual)
+
+        effective_persona, merged_ctx, branch_out = await self._apply_playbook_branches(
+            call_id=call_id,
+            meta=meta,
+            playbook=playbook,
+            qual=qual,
+            newly_set_fields=[f for f in newly_set if f != "__disqualified__"],
+            effective_persona=effective_persona,
+            merged_ctx=merged_ctx,
+        )
+
+        if branch_out.end_call:
+            reply_text = branch_out.end_call_message or (
+                "Thanks for your time. Goodbye."
+            )
+            await self._memory.record_user_turn(call_id, user_input)
+            await self._memory.record_assistant_turn(call_id, reply_text)
+            if persist_transcript:
+                await asyncio.to_thread(
+                    self._persist_turn_rows,
+                    call_id=call_id,
+                    organization_id=organization_id,
+                    user_text=user_input,
+                    assistant_text=reply_text,
+                    stats=ChatTurnStats(),
+                )
+            snapshot_after = qual.snapshot()
+            return TurnResult(
+                reply=reply_text,
+                stats=ChatTurnStats(),
+                qualification=snapshot_after,
+                history_length=len(await self._memory.get_history(call_id)),
+                branches_fired=branch_out.fired_branch_ids,
+                branch_end_call=True,
+                branch_end_call_message=branch_out.end_call_message,
+            )
 
         # 2. Render system prompt + call OpenAI.
         system = render_system_prompt(
@@ -313,7 +353,61 @@ class AIService:
             stats=stats,
             qualification=snapshot_after,
             history_length=len(history),
+            branches_fired=branch_out.fired_branch_ids or None,
         )
+
+    async def _apply_playbook_branches(
+        self,
+        *,
+        call_id: str,
+        meta: dict,
+        playbook: PlaybookRuntimeConfig | None,
+        qual: QualificationState,
+        newly_set_fields: list[str],
+        effective_persona: str,
+        merged_ctx: dict,
+    ):
+        """Evaluate branch rules and persist persona/context updates to Redis."""
+
+        from modules.playbook.branches import BranchEvaluationResult
+
+        empty = BranchEvaluationResult()
+        if not playbook or not playbook.branches:
+            return effective_persona, merged_ctx, empty
+
+        rules = parse_branch_rules(playbook.branches)
+        fired_before = list(meta.get("branches_fired") or [])
+        branch_out = evaluate_branches(
+            rules,
+            qual,
+            newly_set_fields=newly_set_fields,
+            branches_fired=fired_before,
+        )
+        if not branch_out.fired_branch_ids:
+            return effective_persona, merged_ctx, branch_out
+
+        if branch_out.switch_persona:
+            effective_persona = branch_out.switch_persona
+            meta["persona"] = effective_persona
+        if branch_out.objective:
+            merged_ctx["objective"] = branch_out.objective
+            meta.setdefault("extra_context", {})
+            meta["extra_context"]["objective"] = branch_out.objective
+        if branch_out.merge_context:
+            merged_ctx.update(branch_out.merge_context)
+        if branch_out.dynamic_block:
+            merged_ctx["dynamic_block"] = branch_out.dynamic_block
+
+        meta["branches_fired"] = fired_before + branch_out.fired_branch_ids
+        await self._memory.set_meta(call_id, meta)
+
+        log.info(
+            "ai.branches.fired",
+            call_id=call_id,
+            branches=branch_out.fired_branch_ids,
+            persona=effective_persona,
+        )
+        return effective_persona, merged_ctx, branch_out
 
     def _persist_turn_rows(
         self,
@@ -385,8 +479,18 @@ class AIService:
                 playbook, effective_framework
             )
         qual.framework = effective_framework
-        qual.ingest_user_turn(user_input)
+        newly_set = qual.ingest_user_turn(user_input)
         await self._memory.save_qualification(call_id, qual)
+
+        effective_persona, merged_ctx, branch_out = await self._apply_playbook_branches(
+            call_id=call_id,
+            meta=meta,
+            playbook=playbook,
+            qual=qual,
+            newly_set_fields=[f for f in newly_set if f != "__disqualified__"],
+            effective_persona=effective_persona,
+            merged_ctx=merged_ctx,
+        )
 
         system = render_system_prompt(
             persona=effective_persona,

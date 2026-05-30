@@ -34,6 +34,7 @@ from modules.playbook.repository import (
     PlaybookRepository,
     PlaybookVersionRepository,
 )
+from modules.playbook.branches import evaluate_branches, parse_branch_rules
 from modules.playbook.runtime import PlaybookFieldRuntime, PlaybookRuntimeConfig
 from modules.playbook.schema import (
     CreatePlaybookInput,
@@ -122,6 +123,7 @@ def _serialize_payload(playbook: Playbook, fields: list[PlaybookField]) -> dict:
         "voice_id": playbook.voice_id,
         "default_context": playbook.default_context,
         "disqualifying_patterns": playbook.disqualifying_patterns,
+        "branches": playbook.branches or [],
         "version": playbook.version,
         "fields": [
             {
@@ -151,6 +153,7 @@ def _to_runtime(playbook: Playbook, fields: list[PlaybookField]) -> PlaybookRunt
         voice_id=playbook.voice_id,
         default_context=playbook.default_context,
         disqualifying_patterns=list(playbook.disqualifying_patterns or []),
+        branches=list(playbook.branches or []),
         fields=[
             PlaybookFieldRuntime(
                 key=f.key,
@@ -181,6 +184,7 @@ def _detail(playbook: Playbook, fields: list[PlaybookField]) -> PlaybookDetail:
         voice_id=playbook.voice_id,
         default_context=playbook.default_context,
         disqualifying_patterns=playbook.disqualifying_patterns,
+        branches=playbook.branches,
         version=playbook.version,
         fields=[PlaybookFieldOut.model_validate(f) for f in fields],
         created_at=playbook.created_at,
@@ -269,6 +273,7 @@ class PlaybookService:
             voice_id=data.voice_id,
             default_context=data.default_context,
             disqualifying_patterns=data.disqualifying_patterns or None,
+            branches=[b.model_dump() for b in data.branches] if data.branches else None,
             version=1,
         )
         PlaybookRepository.create(db, pb)
@@ -305,6 +310,9 @@ class PlaybookService:
                     f"A playbook named '{name}' already exists"
                 )
             pb.name = name
+
+        if data.branches is not None:
+            pb.branches = [b.model_dump() for b in data.branches]
 
         for attr in (
             "description",
@@ -444,6 +452,7 @@ class PlaybookService:
             voice_id=source.voice_id,
             default_context=source.default_context,
             disqualifying_patterns=source.disqualifying_patterns,
+            branches=list(source.branches or []) if source.branches else None,
             version=1,
         )
         PlaybookRepository.create(db, pb)
@@ -525,6 +534,7 @@ class PlaybookService:
                 disqualifying_patterns=list(
                     payload.get("disqualifying_patterns") or []
                 ),
+                branches=list(payload.get("branches") or []),
                 fields=fields,
             )
 
@@ -597,9 +607,27 @@ class PlaybookService:
         before = QualificationTracker.empty_from_playbook(runtime, fw)
         after = QualificationTracker.empty_from_playbook(runtime, fw)
         newly = after.ingest_user_turn(data.user_text)
+        newly_clean = [f for f in newly if f != "__disqualified__"]
+
+        branch_out = evaluate_branches(
+            parse_branch_rules(runtime.branches),
+            after,
+            newly_set_fields=newly_clean,
+            branches_fired=[],
+        )
+        if branch_out.switch_persona:
+            runtime_persona = branch_out.switch_persona
+        else:
+            runtime_persona = runtime.persona_name
+        if branch_out.objective:
+            merged["objective"] = branch_out.objective
+        if branch_out.merge_context:
+            merged.update(branch_out.merge_context)
+        if branch_out.dynamic_block:
+            merged["dynamic_block"] = branch_out.dynamic_block
 
         rendered = render_system_prompt(
-            persona=runtime.persona_name,
+            persona=runtime_persona,
             framework=runtime.framework,
             extra_context=merged,
             playbook=runtime,
@@ -608,5 +636,6 @@ class PlaybookService:
             rendered_system_prompt=rendered,
             qualification_before=before.snapshot().model_dump(),
             qualification_after=after.snapshot().model_dump(),
-            newly_set_fields=[f for f in newly if f != "__disqualified__"],
+            newly_set_fields=newly_clean,
+            branches_fired=branch_out.fired_branch_ids,
         )

@@ -68,6 +68,26 @@ def default_playbook_specs() -> list[dict]:
             "persona_name": "outbound_sdr",
             "default_objective": "book a 15-minute discovery call",
             "field_specs": _BANT_FIELDS,
+            "branches": [
+                {
+                    "id": "handoff_qualified",
+                    "name": "Hand off when qualified",
+                    "priority": 10,
+                    "once": True,
+                    "when": {
+                        "qualification_status": "qualified",
+                        "min_score": 75,
+                    },
+                    "then": {
+                        "switch_persona": "appointment_setter",
+                        "dynamic_block": (
+                            "The lead is qualified. Stop broad discovery — "
+                            "offer two specific meeting slots and confirm timezone."
+                        ),
+                        "objective": "confirm a meeting in the next 7 days",
+                    },
+                },
+            ],
         },
         {
             "name": "Appointment Setter",
@@ -117,6 +137,7 @@ def seed_defaults_for_org(
                 "value_prop": "we help teams ship better outbound calls.",
             },
             disqualifying_patterns=_DEFAULT_DISQUALIFIERS,
+            branches=spec.get("branches"),
             version=1,
         )
         PlaybookRepository.create(db, pb)

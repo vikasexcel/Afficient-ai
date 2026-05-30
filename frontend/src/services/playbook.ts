@@ -29,6 +29,15 @@ export type PlaybookSummary = {
   updated_at: string;
 };
 
+export type PlaybookBranch = {
+  id: string;
+  name: string;
+  priority?: number;
+  once?: boolean;
+  when?: Record<string, unknown>;
+  then?: Record<string, unknown>;
+};
+
 export type PlaybookDetail = {
   id: string;
   organization_id: string;
@@ -43,6 +52,7 @@ export type PlaybookDetail = {
   voice_id: string | null;
   default_context: Record<string, unknown> | null;
   disqualifying_patterns: string[] | null;
+  branches?: PlaybookBranch[] | null;
   version: number;
   fields: PlaybookField[];
   created_at: string;
@@ -61,6 +71,7 @@ export type CreatePlaybookInput = {
   default_context?: Record<string, unknown>;
   disqualifying_patterns?: string[];
   fields?: Omit<PlaybookField, "id" | "created_at" | "updated_at">[];
+  branches?: PlaybookBranch[];
 };
 
 export type UpdatePlaybookInput = Partial<CreatePlaybookInput>;
@@ -75,6 +86,7 @@ export type PlaybookTestResult = {
   qualification_before: Record<string, unknown>;
   qualification_after: Record<string, unknown>;
   newly_set_fields: string[];
+  branches_fired: string[];
 };
 
 export type PlaybookVersion = {

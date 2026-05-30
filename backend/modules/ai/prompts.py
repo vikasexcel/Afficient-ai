@@ -279,4 +279,8 @@ def render_system_prompt(
         if playbook and playbook.system_prompt
         else p.template
     )
-    return template.format_map(_SafeDict(ctx)).strip()
+    rendered = template.format_map(_SafeDict(ctx)).strip()
+    dynamic = (extra_context or {}).get("dynamic_block") if extra_context else None
+    if dynamic:
+        rendered = f"{rendered}\n\n{str(dynamic).strip()}"
+    return rendered.strip()

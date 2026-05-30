@@ -126,6 +126,9 @@ class Playbook(BaseModel):
         ARRAY(String), nullable=True
     )
 
+    # Declarative branch rules — see :mod:`modules.playbook.branches`.
+    branches: Mapped[list | None] = mapped_column(JSON, nullable=True)
+
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
     fields: Mapped[list["PlaybookField"]] = relationship(

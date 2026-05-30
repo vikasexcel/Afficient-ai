@@ -177,6 +177,9 @@ class _FakeAIService:
             stats = _Stats()
             qualification = _Qual()
             history_length = self.turn_calls * 2
+            branches_fired = None
+            branch_end_call = False
+            branch_end_call_message = None
 
         return _Result()
 

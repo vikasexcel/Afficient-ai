@@ -34,6 +34,7 @@ class PlaybookRuntimeConfig:
     default_context: dict[str, Any] | None = None
     disqualifying_patterns: list[str] = field(default_factory=list)
     fields: list[PlaybookFieldRuntime] = field(default_factory=list)
+    branches: list[dict[str, Any]] = field(default_factory=list)
 
     def to_meta(self) -> dict[str, Any]:
         """Serialise for Redis call meta (JSON-safe)."""
@@ -49,6 +50,7 @@ class PlaybookRuntimeConfig:
             "voice_id": self.voice_id,
             "default_context": self.default_context or {},
             "disqualifying_patterns": self.disqualifying_patterns,
+            "playbook_branches": self.branches,
             "fields": [
                 {
                     "key": f.key,
@@ -93,5 +95,6 @@ class PlaybookRuntimeConfig:
             voice_id=meta.get("voice_id"),
             default_context=meta.get("default_context"),
             disqualifying_patterns=list(meta.get("disqualifying_patterns") or []),
+            branches=list(meta.get("playbook_branches") or []),
             fields=fields,
         )

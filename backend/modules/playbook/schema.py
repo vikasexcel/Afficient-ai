@@ -51,6 +51,17 @@ class PlaybookFieldOut(PlaybookFieldInput):
     model_config = {"from_attributes": True}
 
 
+class PlaybookBranchInput(BaseModel):
+    """One dynamic branching rule (stored as JSON on the playbook)."""
+
+    id: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=120)
+    priority: int = Field(default=100, ge=0, le=1000)
+    once: bool = True
+    when: dict[str, Any] = Field(default_factory=dict)
+    then: dict[str, Any] = Field(default_factory=dict)
+
+
 # ---------------------------------------------------------------------------
 # Create / update
 # ---------------------------------------------------------------------------
@@ -68,6 +79,7 @@ class CreatePlaybookInput(BaseModel):
     default_context: dict[str, Any] | None = None
     disqualifying_patterns: list[str] = Field(default_factory=list)
     fields: list[PlaybookFieldInput] = Field(default_factory=list)
+    branches: list[PlaybookBranchInput] = Field(default_factory=list)
 
     @field_validator("framework")
     @classmethod
@@ -89,6 +101,7 @@ class UpdatePlaybookInput(BaseModel):
     default_context: dict[str, Any] | None = None
     disqualifying_patterns: list[str] | None = None
     fields: list[PlaybookFieldInput] | None = None
+    branches: list[PlaybookBranchInput] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -125,6 +138,7 @@ class PlaybookDetail(BaseModel):
     voice_id: str | None
     default_context: dict[str, Any] | None
     disqualifying_patterns: list[str] | None
+    branches: list[dict[str, Any]] | None = None
     version: int
     fields: list[PlaybookFieldOut]
     created_at: datetime
@@ -169,6 +183,7 @@ class PlaybookTestResponse(BaseModel):
     qualification_before: dict[str, Any]
     qualification_after: dict[str, Any]
     newly_set_fields: list[str]
+    branches_fired: list[str] = Field(default_factory=list)
 
 
 class PlaybookPromptPreview(BaseModel):

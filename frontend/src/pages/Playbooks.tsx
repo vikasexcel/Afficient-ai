@@ -109,6 +109,7 @@ export default function Playbooks() {
           cue_patterns: f.cue_patterns,
           position: f.position,
         })),
+        branches: detail.branches ?? [],
       });
       setDetail(updated);
       toast.success("Saved");
@@ -142,7 +143,8 @@ export default function Playbooks() {
       const res = await testPlaybook(detail.id, { user_text: testText });
       setTestResult(
         `Score: ${(res.qualification_after as { score?: number }).score ?? "?"}/100\n` +
-          `New fields: ${res.newly_set_fields.join(", ") || "none"}`
+          `New fields: ${res.newly_set_fields.join(", ") || "none"}\n` +
+          `Branches fired: ${res.branches_fired?.join(", ") || "none"}`
       );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Test failed");
@@ -282,6 +284,30 @@ export default function Playbooks() {
                       setDetail({ ...detail, opening_line: e.target.value || null })
                     }
                   />
+                </Field>
+
+                <Field label="Branch rules (JSON)">
+                  <Textarea
+                    rows={8}
+                    disabled={!canEdit}
+                    className="font-mono text-[11px]"
+                    value={JSON.stringify(detail.branches ?? [], null, 2)}
+                    onChange={(e) => {
+                      try {
+                        const parsed = JSON.parse(e.target.value) as unknown;
+                        if (Array.isArray(parsed)) {
+                          setDetail({ ...detail, branches: parsed });
+                        }
+                      } catch {
+                        /* allow invalid JSON while typing */
+                      }
+                    }}
+                    placeholder='[{"id":"handoff","name":"...","when":{},"then":{}}]'
+                  />
+                  <p className="text-[10px] text-white/35 mt-1">
+                    Fires after each turn when conditions match. Actions: switch_persona,
+                    dynamic_block, objective, end_call.
+                  </p>
                 </Field>
 
                 <div>

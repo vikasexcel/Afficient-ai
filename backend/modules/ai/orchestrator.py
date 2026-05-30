@@ -591,6 +591,17 @@ class ConversationOrchestrator:
             self.stop()
             return
 
+        if result.branch_end_call:
+            await self._state_machine.transition(
+                ConversationState.AI_SPEAKING, reason="branch_end_call"
+            )
+            await self._safe_speak(
+                tts_session,
+                result.reply,
+            )
+            self.stop()
+            return
+
         await self._state_machine.transition(
             ConversationState.AI_SPEAKING, reason="ai_reply"
         )
