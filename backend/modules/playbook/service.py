@@ -79,7 +79,7 @@ def _field_rows(
                 description=f.description,
                 weight=f.weight,
                 required=f.required,
-                cue_patterns=f.cue_patterns or None,
+                cue_patterns=list(f.cue_patterns or []),
                 position=f.position if f.position else i,
             )
         )
@@ -186,7 +186,21 @@ def _detail(playbook: Playbook, fields: list[PlaybookField]) -> PlaybookDetail:
         disqualifying_patterns=playbook.disqualifying_patterns,
         branches=playbook.branches,
         version=playbook.version,
-        fields=[PlaybookFieldOut.model_validate(f) for f in fields],
+        fields=[
+            PlaybookFieldOut(
+                id=f.id,
+                key=f.key,
+                display_name=f.display_name,
+                description=f.description,
+                weight=f.weight,
+                required=f.required,
+                cue_patterns=list(f.cue_patterns or []),
+                position=f.position,
+                created_at=f.created_at,
+                updated_at=f.updated_at,
+            )
+            for f in fields
+        ],
         created_at=playbook.created_at,
         updated_at=playbook.updated_at,
     )

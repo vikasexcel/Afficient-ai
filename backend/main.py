@@ -19,6 +19,8 @@ from modules.stt.router import router as stt_router
 from modules.telephony.dependencies import shutdown_telephony
 from modules.telephony.router import router as telephony_router
 from modules.playbook.router import router as playbook_router
+from modules.leads.router import list_router as lead_lists_router
+from modules.leads.router import router as leads_router
 from modules.tts.router import router as tts_router
 
 
@@ -74,6 +76,8 @@ app.add_middleware(
         "http://127.0.0.1:20197",
         "http://localhost:20198",
         "http://127.0.0.1:20198",
+        "http://localhost:20199",
+        "http://127.0.0.1:20199",
     ],
     # In non-production, also accept any localhost/127.0.0.1 port so Vite
     # fallbacks (e.g. 20198 when 20197 is taken) don't break preflights.
@@ -98,6 +102,8 @@ for r in (
     ai_router,
     telephony_router,
     playbook_router,
+    leads_router,
+    lead_lists_router,
 ):
     app.include_router(r, prefix=settings.API_PREFIX)
 

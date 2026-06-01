@@ -21,8 +21,40 @@ import {
   type PlaybookSummary,
 } from "@/services/playbook";
 import { listPersonas, type Persona } from "@/services/ai";
+import PlaybookFieldEditor from "@/components/playbooks/PlaybookFieldEditor";
+import {
+  defaultFieldsForFramework,
+  frameworkSwitchMessage,
+  shouldReplaceFieldsOnFrameworkChange,
+} from "@/lib/playbookFieldPresets";
 
 const FRAMEWORKS: PlaybookFramework[] = ["BANT", "MEDDICC", "CUSTOM"];
+
+function handleFrameworkChange(
+  detail: PlaybookDetail,
+  newFramework: PlaybookFramework
+): PlaybookDetail | null {
+  if (newFramework === detail.framework) return detail;
+
+  if (
+    shouldReplaceFieldsOnFrameworkChange(
+      detail.fields,
+      detail.framework,
+      newFramework
+    )
+  ) {
+    if (!window.confirm(frameworkSwitchMessage(newFramework))) {
+      return null;
+    }
+    return {
+      ...detail,
+      framework: newFramework,
+      fields: defaultFieldsForFramework(newFramework),
+    };
+  }
+
+  return { ...detail, framework: newFramework };
+}
 
 export default function Playbooks() {
   const me = useMe((s) => s.data);
@@ -228,12 +260,13 @@ export default function Playbooks() {
                     <select
                       value={detail.framework}
                       disabled={!canEdit}
-                      onChange={(e) =>
-                        setDetail({
-                          ...detail,
-                          framework: e.target.value as PlaybookFramework,
-                        })
-                      }
+                      onChange={(e) => {
+                        const next = handleFrameworkChange(
+                          detail,
+                          e.target.value as PlaybookFramework
+                        );
+                        if (next) setDetail(next);
+                      }}
                       className="w-full h-9 bg-white/[0.04] border border-white/[0.09] rounded-[8px] px-3 text-[13px] text-white"
                     >
                       {FRAMEWORKS.map((f) => (
@@ -310,28 +343,12 @@ export default function Playbooks() {
                   </p>
                 </Field>
 
-                <div>
-                  <div className="text-[11px] font-medium text-white/40 mb-2">
-                    Qualification fields ({detail.fields.length})
-                  </div>
-                  <div className="space-y-2">
-                    {detail.fields.map((f) => (
-                      <div
-                        key={f.key}
-                        className="rounded-[8px] border border-white/[0.07] bg-white/[0.02] px-3 py-2"
-                      >
-                        <div className="text-[12px] text-white">
-                          {f.display_name}{" "}
-                          <span className="text-white/35">({f.key})</span>
-                        </div>
-                        <div className="text-[11px] text-white/40">
-                          weight {f.weight}
-                          {f.required ? " · required" : ""}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                <PlaybookFieldEditor
+                  framework={detail.framework}
+                  fields={detail.fields}
+                  canEdit={canEdit}
+                  onChange={(fields) => setDetail({ ...detail, fields })}
+                />
 
                 {canEdit && (
                   <div className="flex flex-wrap gap-2 pt-2">

@@ -5,12 +5,12 @@ import {
   Phone,
   Plus,
   Search,
-  Upload,
   Users,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import AppLayout from "@/components/layout/AppLayout";
+import LeadUploadDialog from "@/components/leads/LeadUploadDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -186,15 +186,13 @@ export default function Leads() {
           </div>
 
           <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="border-white/[0.08] bg-white/[0.03] text-white/85 hover:bg-white/[0.06] hover:text-white"
-              onClick={() => toast.message("Import will be available soon")}
-            >
-              <Upload size={13} />
-              Import
-            </Button>
+            <LeadUploadDialog
+              onImported={(res) =>
+                toast.success(
+                  `${res.inserted.toLocaleString()} lead${res.inserted === 1 ? "" : "s"} added to "${res.lead_list.name}"`
+                )
+              }
+            />
             <Button
               size="sm"
               className="bg-violet-600 hover:bg-violet-500 text-white"
