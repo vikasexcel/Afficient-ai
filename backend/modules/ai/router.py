@@ -36,6 +36,7 @@ from modules.ai.repository import (
     AICallSummaryRepository,
     AITranscriptRepository,
 )
+from modules.playbook.exceptions import PlaybookError
 from modules.ai.schema import (
     CallListEntry,
     CallListResponse,
@@ -58,7 +59,7 @@ log = get_logger("ai.router")
 router = APIRouter(prefix="/ai", tags=["ai"])
 
 
-def _to_http(exc: AIError) -> HTTPException:
+def _to_http(exc: AIError | PlaybookError) -> HTTPException:
     return HTTPException(status_code=exc.status_code, detail=exc.message)
 
 
@@ -156,7 +157,7 @@ async def converse(
             organization_id=org_id,
             persist_transcript=data.persist_transcript,
         )
-    except AIError as exc:
+    except (AIError, PlaybookError) as exc:
         raise _to_http(exc) from exc
 
     return ConverseResponse(
@@ -186,14 +187,34 @@ async def get_transcript(
     db: Session = Depends(get_db),
     tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
 ):
-    rows = AITranscriptRepository.list_for_call(db, call_id)
     org = _tenant_org_id(tenant)
+
+    # Strict tenant scoping: verify the call exists AND belongs to the
+    # caller's organization before exposing any transcript metadata. Two
+    # legitimate cases are allowed through:
+    #   * The call row is owned by the caller's org.
+    #   * The call row has organization_id=None (legacy / admin scripts).
+    call_row = AICallRepository.get(db, call_id)
+    if call_row is None:
+        raise HTTPException(404, "call not found")
+    if (
+        call_row.organization_id is not None
+        and org is not None
+        and call_row.organization_id != org
+    ):
+        raise HTTPException(404, "call not found")
+
+    rows = AITranscriptRepository.list_for_call(db, call_id)
     entries: list[TranscriptEntry] = []
     for r in rows:
-        # Soft tenant scoping: if the row was written for a specific org,
-        # only return it to the same org. Rows with org=None are global
-        # (admin scripts / e2e tests) and visible to anyone with the role.
-        if r.organization_id is not None and org is not None and r.organization_id != org:
+        # Defence in depth: a stray transcript row with a different org
+        # should never be served to this caller, regardless of the call
+        # row scoping check above.
+        if (
+            r.organization_id is not None
+            and org is not None
+            and r.organization_id != org
+        ):
             continue
         try:
             role = MessageRole(r.role)
@@ -214,7 +235,11 @@ async def get_transcript(
 
     return TranscriptResponse(
         call_id=call_id,
-        organization_id=str(org) if org else None,
+        organization_id=(
+            str(call_row.organization_id)
+            if call_row.organization_id
+            else None
+        ),
         entries=entries,
     )
 
@@ -313,13 +338,27 @@ async def list_calls(
 
     from modules.playbook.model import Playbook
 
+    # Bulk-fetch summaries (1 query instead of N).
+    call_ids = [r.call_id for r in rows]
+    summaries = AICallSummaryRepository.map_for_call_ids(db, call_ids)
+
+    # Bulk-fetch playbooks (1 query instead of N).
+    playbook_ids = {r.playbook_id for r in rows if r.playbook_id}
+    playbook_names: dict = {}
+    if playbook_ids:
+        for pb in (
+            db.query(Playbook)
+            .filter(Playbook.id.in_(list(playbook_ids)))
+            .all()
+        ):
+            playbook_names[pb.id] = pb.name
+
     entries: list[CallListEntry] = []
     for r in rows:
-        summary = AICallSummaryRepository.get(db, r.call_id)
-        playbook_name = None
-        if r.playbook_id:
-            pb = db.get(Playbook, r.playbook_id)
-            playbook_name = pb.name if pb else None
+        summary = summaries.get(r.call_id)
+        playbook_name = (
+            playbook_names.get(r.playbook_id) if r.playbook_id else None
+        )
         entries.append(
             CallListEntry(
                 call_id=r.call_id,

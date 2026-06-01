@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta
 
+from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from modules.auth.model import User
@@ -47,48 +49,61 @@ class AuthService:
         db: Session,
         data,
     ):
+        email = data.email.strip().lower()
 
-        org = AuthRepository.create_organization(
-            db,
-            data.organization,
-        )
+        # Precheck so we can return a clean 409 instead of letting the
+        # uniqueness constraint raise IntegrityError -> 500.
+        existing = AuthRepository.get_user(db, email)
+        if existing is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="email already registered",
+            )
 
-        user = User(
-            full_name=data.full_name,
-            email=data.email.strip().lower(),
-            password_hash=hash_password(
-                data.password
-            ),
-        )
+        try:
+            org = AuthRepository.create_organization(
+                db,
+                data.organization,
+            )
 
-        user = AuthRepository.create_user(
-            db,
-            user,
-        )
+            user = User(
+                full_name=data.full_name,
+                email=email,
+                password_hash=hash_password(data.password),
+            )
 
-        membership = Membership(
-            user_id=user.id,
-            organization_id=org.id,
-            role=Role.OWNER,
-            status=MembershipStatus.ACTIVE,
-        )
+            user = AuthRepository.create_user(db, user)
 
-        AuthRepository.create_membership(
-            db,
-            membership,
-        )
+            membership = Membership(
+                user_id=user.id,
+                organization_id=org.id,
+                role=Role.OWNER,
+                status=MembershipStatus.ACTIVE,
+            )
 
-        AuthService.log_event(
-            db,
-            user.id,
-            "REGISTER",
-            user.email,
-        )
+            AuthRepository.create_membership(db, membership)
 
-        db.commit()
+            AuthService.log_event(
+                db,
+                user.id,
+                "REGISTER",
+                user.email,
+            )
+
+            db.commit()
+        except IntegrityError:
+            # Race condition: someone snuck in between the precheck and
+            # the insert. Bubble up as 409 instead of 500.
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="email already registered",
+            )
 
         return {
-            "message": "registered"
+            "message": "registered",
+            "user_id": str(user.id),
+            "organization_id": str(org.id),
         }
 
     @staticmethod
@@ -96,34 +111,25 @@ class AuthService:
         db: Session,
         data,
     ):
-
+        # Always do bcrypt work whether the user exists or not so the
+        # response time doesn't leak email enumeration.
         user = AuthRepository.get_user(
             db,
             data.email.strip().lower(),
         )
 
-        if not user:
-            return {
-                "error": "invalid"
-            }
+        if user is None:
+            # Burn comparable CPU against a dummy hash to keep timing
+            # consistent with the wrong-password branch.
+            verify_password(data.password, _DUMMY_BCRYPT_HASH)
+            raise HTTPException(401, "invalid credentials")
 
-        valid = verify_password(
-            data.password,
-            user.password_hash,
-        )
-
+        valid = verify_password(data.password, user.password_hash)
         if not valid:
-            return {
-                "error": "invalid"
-            }
+            raise HTTPException(401, "invalid credentials")
 
-        access = create_token(
-            str(user.id)
-        )
-
-        refresh = create_refresh_token(
-            str(user.id)
-        )
+        access = create_token(str(user.id))
+        refresh = create_refresh_token(str(user.id))
 
         AuthRepository.create_session(
             db,
@@ -131,24 +137,19 @@ class AuthService:
                 user_id=user.id,
                 refresh_token=refresh,
                 expires_at=(
-                    datetime.utcnow()
-                    + timedelta(days=30)
+                    datetime.utcnow() + timedelta(days=30)
                 ),
             ),
         )
 
-        AuthService.log_event(
-            db,
-            user.id,
-            "LOGIN",
-            user.email,
-        )
+        AuthService.log_event(db, user.id, "LOGIN", user.email)
 
         db.commit()
 
         return {
             "access_token": access,
             "refresh_token": refresh,
+            "token_type": "bearer",
         }
 
     @staticmethod
@@ -156,40 +157,19 @@ class AuthService:
         db: Session,
         data,
     ):
+        session = AuthRepository.get_session(db, data.refresh_token)
 
-        session = (
-            AuthRepository
-            .get_session(
-                db,
-                data.refresh_token,
-            )
-        )
-
-        if not session:
-            return {
-                "error":
-                "invalid session"
-            }
+        if session is None:
+            raise HTTPException(401, "invalid session")
 
         if session.revoked:
-            return {
-                "error":
-                "revoked"
-            }
+            raise HTTPException(401, "session revoked")
 
-        payload = decode_token(
-            data.refresh_token
-        )
-
+        payload = decode_token(data.refresh_token)
         if not payload:
-            return {
-                "error":
-                "expired"
-            }
+            raise HTTPException(401, "session expired")
 
-        access = create_token(
-            payload["sub"]
-        )
+        access = create_token(payload["sub"])
 
         AuthService.log_event(
             db,
@@ -201,7 +181,8 @@ class AuthService:
         db.commit()
 
         return {
-            "access_token": access
+            "access_token": access,
+            "token_type": "bearer",
         }
 
     @staticmethod
@@ -209,21 +190,12 @@ class AuthService:
         db: Session,
         data,
     ):
+        session = AuthRepository.revoke_session(db, data.refresh_token)
 
-        session = (
-            AuthRepository
-            .revoke_session(
-                db,
-                data.refresh_token,
-            )
-        )
-
-        if not session:
-
-            return {
-                "error":
-                "session not found"
-            }
+        if session is None:
+            # Idempotent: returning 204-style "ok" so a double-logout
+            # from the SPA doesn't surface as an error to the user.
+            return {"message": "logged out"}
 
         AuthService.log_event(
             db,
@@ -234,7 +206,12 @@ class AuthService:
 
         db.commit()
 
-        return {
-            "message":
-            "logged out"
-        }
+        return {"message": "logged out"}
+
+
+# Pre-computed bcrypt hash of a fixed dummy password. We compare against
+# this in the user-not-found branch of login() so response timing is
+# indistinguishable from the wrong-password branch.
+_DUMMY_BCRYPT_HASH = (
+    "$2b$12$abcdefghijklmnopqrstuuVrI2HZ7Z9P6Z8a/jrCWfHQ.s3yJ4hxa"
+)

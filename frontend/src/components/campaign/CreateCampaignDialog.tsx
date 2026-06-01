@@ -20,9 +20,11 @@ export default function CreateCampaignDialog() {
   const [prompt, setPrompt] = useState("");
 
   async function submit() {
+    // Backend only accepts {name} today; the prompt template stays
+    // local until the playbook integration lands.
+    void prompt;
     await createCampaign({
       name,
-      prompt_template: prompt,
     });
 
     setOpen(false);

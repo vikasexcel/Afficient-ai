@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { BookOpen, Copy, Loader2, Plus, RefreshCw, Sparkles } from "lucide-react";
+import { BookOpen, Loader2, Plus, RefreshCw, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
 import AppLayout from "@/components/layout/AppLayout";
@@ -315,7 +315,7 @@ export default function Playbooks() {
                     Qualification fields ({detail.fields.length})
                   </div>
                   <div className="space-y-2">
-                    {detail.fields.map((f, i) => (
+                    {detail.fields.map((f) => (
                       <div
                         key={f.key}
                         className="rounded-[8px] border border-white/[0.07] bg-white/[0.02] px-3 py-2"

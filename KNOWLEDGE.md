@@ -10,14 +10,17 @@
 
 Current state of features (as observed in code):
 
-- Auth, multi-tenant orgs, role-based members — **implemented end-to-end**.
+- Auth, multi-tenant orgs, role-based members — **implemented end-to-end** (incl. proper 401/409 semantics, password strength validation, audit log scoped to org + paginated).
 - LiveKit room/token/session management — **implemented end-to-end**.
 - **ElevenLabs TTS** streaming into LiveKit rooms — **implemented end-to-end** (backend + smoke tested).
 - **Deepgram STT** subscribing to a LiveKit room and emitting transcript events — **implemented end-to-end** (backend + smoke endpoint + frontend debug UI).
-- **OpenAI GPT-4o conversation engine** — **implemented end-to-end** with Redis-backed conversation memory, BANT/MEDDICC qualification, Postgres-persisted transcripts and call summaries. Wired into the frontend Calls page (assistant panel) and Transcripts page (real DB data).
+- **OpenAI GPT-4o conversation engine** — **implemented end-to-end** with Redis-backed conversation memory, BANT/MEDDICC qualification, Postgres-persisted transcripts and call summaries. Wired into the frontend Calls page (assistant panel) and Transcripts page (real DB data). `/ai/calls` listing uses a bulk-fetch path (no N+1).
 - **ConversationOrchestrator** wiring STT → GPT-4o → TTS with barge-in — implemented (backend) and exercisable via `scripts/run_ai_agent.py`.
-- Campaigns / workflows / executions — **scaffolded** (basic CRUD; the `campaign` worker still calls the legacy `AIService.execute` shim, which now delegates to GPT-4o via `modules/ai/provider.py`).
+- **Playbooks** — full CRUD, publish/archive/duplicate, versioned snapshots, dry-run `/test`, declarative branch rules with strict `when`-key allowlist. Drives prompts + qualification on AI calls.
+- Campaigns / workflows / executions — **wired end-to-end**: the worker now talks to the modern `OpenAIClient` (the legacy `AIService.execute` shim was removed). Auth + tenant-scoping enforced on `/campaigns/execute/{wf}` and `/campaigns/executions/{id}`.
+- **Telephony (Twilio)** — outbound originate + status/voice webhooks + LiveKit SIP TwiML. Mock-origination path explicitly **refuses to run when `ENV=production`**.
 - Frontend **Calls** and **Transcripts** pages — **wired to the live backend** (GPT-4o chat, Deepgram transcribe smoke, real transcripts + summaries). **Leads** and **Analytics** pages remain UI-only with mock data.
+- **Test suite** — 29 pytest cases under `backend/tests/` cover auth, audit scoping, password rules, campaign worker, playbook branches, tenant isolation, rate limit, Twilio prod guard. Run with `pytest tests/`.
 
 ---
 
@@ -42,6 +45,8 @@ Current state of features (as observed in code):
 - **celery / kombu** — listed in `requirements.txt` (no worker code found yet; likely planned)
 - **prometheus-fastapi-instrumentator / prometheus_client** — present in requirements (not wired into `main.py`)
 - **smtplib** (stdlib) — SMTP email delivery
+- **pytest + pytest-asyncio** — backend test runner (added; not in `requirements.txt` yet — install separately in dev/CI)
+- **twilio** (`>=9.3,<10`) — Twilio REST + signature validator
 
 ### Frontend (`frontend/`)
 
@@ -601,6 +606,30 @@ If SMTP isn't fully configured, `mailer.py` logs a warning and skips sending —
 
 > When `OPENAI_API_KEY` is missing, the AI singletons raise `AIConfigError` on first use and the FastAPI dependency translates it to a clean HTTP 500 with `detail = "OPENAI_API_KEY is not set"`. The app still boots; only `/ai/*` endpoints fail.
 
+### Twilio / Telephony
+
+| Var | Required | Default | Purpose |
+|---|---|---|---|
+| `TWILIO_ACCOUNT_SID` | for PSTN | `""` | Twilio account SID. Values starting with `ACdummy` trigger mock-mode in dev and **raise `TelephonyConfigError` in production**. |
+| `TWILIO_AUTH_TOKEN` | for PSTN | `""` | REST + signature-validation secret. |
+| `TWILIO_FROM_NUMBER` | for PSTN | `""` | Default E.164 caller-id. |
+| `TWILIO_PUBLIC_BASE_URL` | **for production** | `""` | Fully-qualified URL used in `voice_url` / `status_callback` registered with Twilio. If empty, falls back to `request.url.netloc` — won't work behind a private host. |
+| `TWILIO_VALIDATE_SIGNATURE` | recommend `true` in prod | `false` | When false, webhooks accept any signature. `main.py` emits `app.startup.unsafe` if `ENV=production` and this is false. |
+| `TWILIO_STATUS_CALLBACK_EVENTS` | no | `initiated,ringing,answered,completed` | Subset of Twilio call lifecycle events to receive. |
+
+### Rate limiting
+
+| Var | Default | Purpose |
+|---|---|---|
+| `RATE_LIMIT_ENABLED` | `true` | Master switch; tests / load-gen can set `false`. |
+| `RATE_LIMIT_REQUESTS` | `300` | Requests allowed per window for general API routes. |
+| `RATE_LIMIT_WINDOW_SECONDS` | `60` | Window length. |
+| `RATE_LIMIT_AUTH_REQUESTS` | `10` | Stricter bucket for `/auth/login`, `/auth/register`, `/auth/refresh`. |
+| `RATE_LIMIT_AUTH_WINDOW_SECONDS` | `60` | |
+| `RATE_LIMIT_EXEMPT_PATHS` | `"/health,/api/v1/telephony/webhooks/twilio/voice,/api/v1/telephony/webhooks/twilio/status,/docs,/openapi.json,/redoc,/favicon.ico"` | Comma-separated path prefixes. `/` (root) and all `OPTIONS` requests are always exempt. |
+
+Scoping: when a valid `Authorization: Bearer …` JWT is present, the limiter buckets by `user:{sub}`; otherwise it falls back to `ip:{remote_addr}`.
+
 ### Logging
 
 | Var | Default | Purpose |
@@ -697,7 +726,29 @@ python scripts/run_ai_agent.py --room my-test-room
 
 These exercise the full auth → LiveKit / TTS / STT / GPT-4o pipeline against a running backend. `e2e_ai_test.py` requires `OPENAI_API_KEY` in `backend/.env`. Set `E2E_BASE_URL=http://127.0.0.1:8001` (or 8002) if your backend is not on the script's default.
 
-### F. Deployment
+### F. Pytest suite (regression tests)
+
+```bash
+cd backend
+source venv/bin/activate
+pip install pytest pytest-asyncio    # not yet in requirements.txt
+pytest tests/ -v
+```
+
+Lives under `backend/tests/`:
+
+- `test_auth.py` (12 cases) — duplicate register → 409, weak passwords → 422, login/refresh/logout → 401 on bad creds, `/auth/audit` requires auth, org-scoping, role gating, pagination.
+- `test_campaign.py` (6 cases) — `/campaigns/execute/*` auth gating, cross-org 404, worker uses `OpenAIClient`.
+- `test_ai_playbook.py` (6 cases) — transcript 404 for unknown / cross-tenant call ids, archived playbook → 422, unknown `when` keys rejected, prompt grammar with missing lead name.
+- `test_security_and_misc.py` (5 cases) — async rate-limit window, exempt paths, Twilio production guard, branch validators.
+
+`conftest.py` disables the rate limiter for the suite (`RATE_LIMIT_ENABLED=false`) and provides `unique_user` / `second_user` / `auth_headers` fixtures.
+
+### G. External-service health check
+
+A one-shot health probe lives at `scripts/healthcheck.py` (or `/tmp/aifficient-healthcheck/healthcheck.py` in dev). It hits lightweight endpoints on OpenAI, ElevenLabs, Deepgram, Twilio, LiveKit, SMTP and the public webhook URL, masks secrets, and prints a `VALID / INVALID / MISSING / DISABLED` verdict per service. Safe to run against production credentials.
+
+### H. Deployment
 
 See `docs/DEPLOY_AWS.md` for a step-by-step AWS guide (S3+CloudFront, App Runner, RDS, ElastiCache, Secrets Manager, LiveKit Cloud).
 
@@ -717,8 +768,10 @@ See `docs/DEPLOY_AWS.md` for a step-by-step AWS guide (S3+CloudFront, App Runner
 10. **Single axios instance.** All service modules share it; the interceptor centralizes auth, refresh, and 401 handling.
 11. **Theme via next-themes + Tailwind v4 tokens.** A light-mode safety net in `index.css` lets legacy dark-only utility classes degrade gracefully in light mode without rewriting every component.
 12. **Alembic for migrations.** 13 numbered revisions in `backend/migrations/versions/`; the source-of-truth is the ORM models. AI tables (`ai_calls`, `ai_transcript_entries`, `ai_call_summaries`) are FK'd to organizations and (optionally) users so transcripts are tenant-scoped.
-13. **structlog for logs.** Console renderer in dev, JSON renderer in prod / when `LOG_JSON=true`. AI module emits structured events (`ai.call.started`, `ai.turn.done`, `ai.complete.done`, `ai.stream_collected.done`, `ai.finalize.done`) with latency, token counts, model, qualification score and TTFT for observability.
-14. **Rate limiting at the edge.** Per-IP Redis sliding window (30 req / 60s) applied as middleware to **all** routes, including health.
+13. **structlog for logs.** Console renderer in dev, JSON renderer in prod / when `LOG_JSON=true`. AI module emits structured events (`ai.call.started`, `ai.turn.done`, `ai.complete.done`, `ai.stream_collected.done`, `ai.finalize.done`) with latency, token counts, model, qualification score and TTFT for observability. Rate-limit middleware uses `rate_limit.exceeded` only on 429 (no per-request log noise).
+14. **Rate limiting at the edge.** Async Redis sliding window scoped by **JWT subject when present, client IP otherwise**. Configurable per bucket: `RATE_LIMIT_REQUESTS` (default 300/min for API) and `RATE_LIMIT_AUTH_REQUESTS` (default 10/min for `/auth/login`, `/auth/register`, `/auth/refresh`). Exempts `/health`, `/`, `/api/v1/telephony/webhooks/*`, `/docs`, `/openapi.json`, `/redoc`, `/favicon.ico`, and all `OPTIONS` preflights. Disable via `RATE_LIMIT_ENABLED=false` in tests/load-gen.
+15. **Production safety guards.** `main.py` lifespan emits `app.startup.unsafe` errors when `ENV=production` and any of: `TWILIO_VALIDATE_SIGNATURE=false`, `TWILIO_ACCOUNT_SID` starts with `ACdummy`, or `JWT_SECRET` is shorter than 32 chars. `TwilioClient.create_call` raises `TelephonyConfigError` instead of mock-originating when the SID is a dummy and `ENV=production`.
+16. **Tenant isolation enforced at the row level.** Cross-tenant access to AI call transcripts, playbooks, telephony calls, campaigns, workflows and executions returns `404` (never `200` with empty data, never `500`). Audit log filters via the org's `Memberships` set; lower-role users only see their own audit rows.
 
 ---
 
@@ -729,13 +782,13 @@ These are real items found while scanning the repo, not speculation.
 ### Backend
 
 - **Secrets committed to `backend/.env`.** ElevenLabs API key, Gmail SMTP app password, JWT secret, LiveKit dev secret, **OpenAI API key**, and **Deepgram API key** are present in the working tree. Must be rotated before public deployment and removed from history.
+- **Twilio credentials are dummies** (`ACdummy.../dummy_token`). Real PSTN origination is disabled in production by `TelephonyConfigError`; replace with real SID/token before any outbound calling.
+- **`TWILIO_PUBLIC_BASE_URL` is unset.** Webhook URLs registered with Twilio fall back to `request.url.netloc`, which won't work behind a private host. Required for production.
+- **`TWILIO_VALIDATE_SIGNATURE=false` by default.** Production startup logs an error; flip to `true` once a public URL exists.
+- **ElevenLabs voice id mismatch.** `.env` ships a voice id (`21m00Tcm4TlvDq8ikWAM`) that's not in the configured account — runtime TTS falls back to the default voice. Update `ELEVENLABS_VOICE_ID` or remove it.
 - **CORS allowlist is dev-only** (`main.py` allows `localhost:5173/5174` plus `localhost:20197`). Production frontend origins must be added.
-- **Rate limit logs to stdout via `print(..., flush=True)`** in `common/security/protection.py`. Should use the structured logger.
-- **Rate limit applies to `/health`** and to `/ai/*`. Health/readiness probes can be throttled; AI E2E scripts work around this by flushing the Redis `api:*` keys between runs.
-- **`get_current_org` (`modules/auth/dependencies.py`) is a stub** that returns `{"organization":"current"}` regardless of the user. The AI module sidesteps this by reading `organization_id` directly from the tenant dict in its router.
-- **`CampaignService.execute` is defined twice** in `modules/campaign/service.py` — only the second definition (which calls the worker synchronously) is reachable.
-- **`run_execution` (`modules/campaign/worker.py`) runs synchronously inside the request thread** and contains a `print(result)`. No background queue, despite Celery being in `requirements.txt`.
-- **`GET /auth/audit`** returns **all** audit logs with no tenant scoping or pagination.
+- **`get_current_org` (`modules/auth/dependencies.py`) is a stub** that returns `{"organization":"current"}` regardless of the user. The AI / campaign / playbook modules sidestep this by reading `organization_id` directly from the tenant dict in their routers. Should be removed or made real.
+- **`run_execution` (`modules/campaign/worker.py`) runs synchronously inside the request thread.** Now async-correct and calls `OpenAIClient`, but still no background queue, despite Celery being in `requirements.txt`. Long-running campaigns will tie up workers.
 - **Duplicate `get_db`** helpers in `database/session.py` and `database/dependencies.py`.
 - **`prometheus-fastapi-instrumentator` is in `requirements.txt` but is not registered** in `main.py`.
 - **`celery` is in `requirements.txt` but there are no Celery tasks or worker process.**
@@ -743,6 +796,7 @@ These are real items found while scanning the repo, not speculation.
 - **`backend/next-app/`** appears unused (no source, only config files).
 - **`/ai/generate` and `/ai/converse` do not stream responses to the HTTP client** even though the underlying `OpenAIClient` supports streaming (`stream_collected`). The orchestrator uses streaming internally for TTFT, but the public REST endpoints buffer the full reply. Add SSE/chunked endpoints if the frontend wants token-by-token rendering.
 - **No automated tests for `ConversationOrchestrator`.** It is exercised manually via `scripts/run_ai_agent.py`; barge-in correctness is not regression-protected.
+- **`pytest` / `pytest-asyncio` not yet pinned in `requirements.txt`.** Test suite runs locally but CI will need them added.
 
 ### Frontend
 
@@ -753,8 +807,6 @@ These are real items found while scanning the repo, not speculation.
 - **No global error boundary.** Unhandled render errors will white-screen the SPA.
 - **Bundle size warning at build time** (~1.1 MB JS, ~320 KB gzipped). Consider route-level code splitting via `React.lazy` once pages have real backend wiring.
 - **`AuthTokens` shape** assumes `{ access_token, refresh_token }` — backend's `/auth/refresh` returns only `{ access_token }`, which the interceptor correctly handles. Documenting here so future changes don't break refresh.
-- **Pre-existing TypeScript errors** in `components/campaign/CreateCampaignDialog.tsx` (unknown `prompt_template` field) and `pages/Dashboard.tsx` (unused `i`). Not introduced by recent AI/STT work but block a clean `tsc -b` until fixed.
-- **`tsconfig.app.json` uses `baseUrl`** which is deprecated in TypeScript 6+ and produces a fatal `TS5101` unless `--ignoreDeprecations 6.0` is passed. Migrate to `paths`-only configuration.
 - **Node 20.18.2 in the dev environment** is below Vite 8's recommended `20.19+ / 22.12+` — Vite still runs but prints a warning at startup.
 
 ### Resolved (kept for trace, do not re-open without re-checking)
@@ -762,6 +814,20 @@ These are real items found while scanning the repo, not speculation.
 - ~~`AIProvider.generate` is a stub.~~ Replaced; `modules/ai/provider.py` now delegates to `OpenAIClient.agenerate`. The legacy `AIService.execute(prompt)` shim is preserved for the campaign worker.
 - ~~No real LLM integration.~~ Full GPT-4o engine landed: `/ai/generate`, `/ai/converse`, BANT/MEDDICC qualification, Redis memory, Postgres transcripts and summaries, live orchestrator.
 - ~~Transcripts page uses mock data only.~~ Now backed by `GET /ai/calls` + `GET /ai/calls/{id}/transcript`.
+- ~~`GET /auth/audit` returns every tenant's audit log, unauthenticated, no pagination.~~ Now requires JWT, scopes by org membership (owners/admins) or self (agents/members), paginated via `AuditListResponse`.
+- ~~`/campaigns/execute/{wf}` and `/campaigns/executions/{id}` accept no auth.~~ Now gated by `requires(Role.OWNER, Role.ADMIN, Role.AGENT)` and tenant-joined.
+- ~~Campaign worker crashes (`AIService.execute` missing).~~ Worker rewritten against `OpenAIClient.complete`; `CampaignService.execute` deduplicated and made async.
+- ~~Login with wrong credentials returns 200.~~ Returns 401; user enumeration mitigated via constant-time bcrypt verify on missing-user path.
+- ~~Duplicate registration crashes with 500.~~ Returns 409 with a clean message.
+- ~~No password strength validation.~~ `RegisterInput` enforces min length + character classes via `field_validator`.
+- ~~`/ai/converse` returns 500 on inactive playbook.~~ Catches `PlaybookError` and surfaces 422.
+- ~~Cross-tenant transcript read returns 200 with empty payload.~~ Returns 404.
+- ~~`/ai/calls` does N+1 DB hits.~~ Bulk-fetch summaries and playbooks; constant queries.
+- ~~Rate limit too aggressive, blocking `/health`, logging via `print()`.~~ Rewritten async, JWT-scoped, path-exempt, structlog-only.
+- ~~Playbook branch matcher silently accepts unknown `when` keys.~~ Whitelisted; unknown keys → 422.
+- ~~`{lead_name}` defaults to `"there"` producing broken sentences.~~ Defaults to `"the prospect"`.
+- ~~Twilio mock-origination silently triggered in production.~~ Raises `TelephonyConfigError` when `ENV=production`.
+- ~~Frontend `npm run build` fails on TS6 `baseUrl` deprecation + unused identifiers.~~ Removed `baseUrl`, cleaned imports/vars; `tsc -b && vite build` is clean.
 
 ---
 
@@ -801,4 +867,4 @@ If something is genuinely unclear from reading the code, write **"Not clearly de
 
 ---
 
-*Last full review: 2026-05-29 — covers the addition of the Deepgram STT module, the OpenAI GPT-4o conversation engine (`modules/ai/`), the AI tables migration, the new `/ai/*` and `/stt/*` endpoints, the frontend `services/ai.ts`, `services/stt.ts`, `store/ai.ts`, and the rewritten Calls + Transcripts pages. Re-scan whenever you suspect drift.*
+*Last full review: 2026-06-01 — covers the post-E2E security and stability pass: hardened `/auth/audit`, `/campaigns/*`, `/ai/calls/*/transcript`; proper HTTP semantics for login/register/refresh/logout; password strength rules; campaign worker rebuilt on `OpenAIClient`; async/JWT-scoped Redis rate limiter with path exemptions; playbook branch-key whitelist; Twilio production guards; N+1 fix on `/ai/calls`; frontend `tsc -b && vite build` clean; new pytest suite (`backend/tests/`, 29 cases); external-service `healthcheck.py`. Re-scan whenever you suspect drift.*

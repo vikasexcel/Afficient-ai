@@ -244,3 +244,18 @@ class AICallSummaryRepository:
             .filter(AICallSummary.call_id == call_id)
             .one_or_none()
         )
+
+    @staticmethod
+    def map_for_call_ids(
+        db: Session, call_ids: Sequence[str]
+    ) -> dict[str, AICallSummary]:
+        """Bulk-fetch summaries for a batch of call ids (avoids N+1)."""
+
+        if not call_ids:
+            return {}
+        rows = (
+            db.query(AICallSummary)
+            .filter(AICallSummary.call_id.in_(list(call_ids)))
+            .all()
+        )
+        return {r.call_id: r for r in rows}

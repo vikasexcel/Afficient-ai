@@ -7,19 +7,17 @@ export default function AppLayout({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex min-h-screen bg-background text-foreground">
+    // Lock the outer shell to the viewport so the sidebar + header stay put
+    // and only the main content area scrolls.
+    <div className="flex h-screen overflow-hidden bg-background text-foreground">
       <Sidebar />
 
-      <div
-        className="
-          flex-1
-        "
-      >
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
         <Header />
 
-        <div className="app-content p-8">
+        <main className="app-content flex-1 overflow-y-auto p-8">
           {children}
-        </div>
+        </main>
       </div>
     </div>
   );

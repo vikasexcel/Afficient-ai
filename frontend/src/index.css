@@ -273,4 +273,40 @@ html:not(.dark) textarea::placeholder {
   color: rgb(15 15 18 / 0.45);
 }
 
+/*
+ * Native <select> dropdown popup readability.
+ *
+ * Pages use translucent utilities (e.g. `bg-white/[0.04]`) on <select>, which
+ * looks correct for the closed control because it composites over the dark
+ * page. But the OS-rendered dropdown popup has no parent to composite over —
+ * each <option> ends up either transparent or OS-default, producing
+ * white-on-white text in dark theme and washed-out contrast in light theme.
+ *
+ * Force a solid backing + readable text on both <select> and <option> per
+ * theme. The dark-mode color (`#15151a`) is visually indistinguishable from
+ * a 4% white tint over the page background but renders correctly in the
+ * native popup.
+ */
+.dark select,
+.dark select option,
+.dark select optgroup {
+  background-color: #15151a;
+  color: rgb(245 245 247);
+}
+
+html:not(.dark) select,
+html:not(.dark) select option,
+html:not(.dark) select optgroup {
+  background-color: #ffffff;
+  color: rgb(15 15 18);
+}
+
+/* Disabled <option> rows (the "No active playbooks" placeholder etc). */
+.dark select option:disabled {
+  color: rgb(255 255 255 / 0.4);
+}
+html:not(.dark) select option:disabled {
+  color: rgb(15 15 18 / 0.4);
+}
+
 /* Sidebar/header brand text already use violet for accents — leave alone. */

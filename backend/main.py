@@ -27,6 +27,26 @@ async def lifespan(app: FastAPI):
     configure_logging()
     log = get_logger("app")
     log.info("app.startup", name=settings.APP_NAME, env=settings.ENV)
+
+    # Loud guard rails for production deployments: refuse to start (or
+    # at least scream) when known-unsafe combinations are detected.
+    if settings.ENV.lower() in ("production", "prod"):
+        if not settings.TWILIO_VALIDATE_SIGNATURE:
+            log.error(
+                "app.startup.unsafe",
+                reason="TWILIO_VALIDATE_SIGNATURE must be true in production",
+            )
+        if (settings.TWILIO_ACCOUNT_SID or "").startswith("ACdummy"):
+            log.error(
+                "app.startup.unsafe",
+                reason="TWILIO_ACCOUNT_SID is a dummy placeholder",
+            )
+        if not settings.JWT_SECRET or len(settings.JWT_SECRET) < 32:
+            log.error(
+                "app.startup.unsafe",
+                reason="JWT_SECRET is missing or shorter than 32 chars",
+            )
+
     try:
         yield
     finally:
@@ -42,6 +62,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.add_middleware(RateLimitMiddleware)
+_is_prod = (settings.ENV or "").lower() == "production"
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -51,7 +72,14 @@ app.add_middleware(
         "http://127.0.0.1:5174",
         "http://localhost:20197",
         "http://127.0.0.1:20197",
+        "http://localhost:20198",
+        "http://127.0.0.1:20198",
     ],
+    # In non-production, also accept any localhost/127.0.0.1 port so Vite
+    # fallbacks (e.g. 20198 when 20197 is taken) don't break preflights.
+    allow_origin_regex=(
+        None if _is_prod else r"^http://(localhost|127\.0\.0\.1):\d+$"
+    ),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

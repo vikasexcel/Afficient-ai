@@ -156,6 +156,27 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     LOG_JSON: bool = False
 
+    # ------------------------------------------------------------------
+    # Rate limiting (Redis-backed sliding-window per identity)
+    # ------------------------------------------------------------------
+    # Default budget per identity. Tightened for unauthenticated auth
+    # endpoints (see RATE_LIMIT_AUTH_*).
+    RATE_LIMIT_REQUESTS: int = 300
+    RATE_LIMIT_WINDOW_SECONDS: int = 60
+    # Stricter bucket applied to the login/register/refresh endpoints so
+    # an attacker can't brute force from one IP.
+    RATE_LIMIT_AUTH_REQUESTS: int = 10
+    RATE_LIMIT_AUTH_WINDOW_SECONDS: int = 60
+    # Set to False in tests / load-gen environments to disable the
+    # middleware entirely.
+    RATE_LIMIT_ENABLED: bool = True
+    # Comma-separated path prefixes that bypass the limiter (CORS
+    # preflights are handled separately by checking the request method).
+    RATE_LIMIT_EXEMPT_PATHS: str = (
+        "/api/v1/health,/health,/,"
+        "/api/v1/telephony/webhooks,/docs,/openapi.json,/redoc,/favicon.ico"
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:

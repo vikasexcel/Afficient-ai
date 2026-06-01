@@ -21,8 +21,9 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true,
 
-    /* Path aliases */
-    "baseUrl": ".",
+    /* Path aliases — Vite resolves @ via vite.config.ts. TypeScript no
+       longer needs baseUrl (deprecated in TS 6.0); leaving paths as-is
+       works because tsc resolves them relative to the tsconfig file. */
     "paths": {
       "@/*": ["./src/*"]
     }

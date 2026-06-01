@@ -191,14 +191,23 @@ class TwilioClient:
             from_number = self._phone_number
 
         # Dev / CI: skip the real Twilio REST call when using placeholder
-        # credentials (TWILIO_ACCOUNT_SID=ACdummy... in .env).
+        # credentials (TWILIO_ACCOUNT_SID=ACdummy... in .env). Refuse to
+        # mock in production so we never silently bill teams for calls
+        # that never went out.
         if self._account_sid.startswith("ACdummy"):
+            if settings.ENV.lower() in ("production", "prod"):
+                raise TelephonyConfigError(
+                    "TWILIO_ACCOUNT_SID is a dummy placeholder — refusing "
+                    "to originate calls in production. Set real Twilio "
+                    "credentials or disable telephony."
+                )
             fake_sid = f"CA{uuid.uuid4().hex}"
             log.warning(
                 "telephony.twilio.mock_originate",
                 room=room_name,
                 to=to_number,
                 sid=fake_sid,
+                env=settings.ENV,
             )
             return OriginatedCall(
                 sid=fake_sid,

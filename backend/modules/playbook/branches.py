@@ -18,6 +18,23 @@ from typing import Any
 from modules.ai.qualification import QualificationState
 
 
+# Single source of truth for the keys that the matcher actually
+# understands. New conditions must add their key here AND implement the
+# corresponding branch in :meth:`BranchCondition.matches` -- otherwise
+# from_dict() will reject them so rules can't silently no-op or
+# always-match.
+_ALLOWED_WHEN_KEYS = frozenset(
+    {
+        "qualification_status",
+        "min_score",
+        "max_score",
+        "fields_all_answered",
+        "fields_any_answered",
+        "field_set_this_turn",
+    }
+)
+
+
 @dataclass(frozen=True)
 class BranchCondition:
     """When-clause for a branch rule."""
@@ -33,6 +50,19 @@ class BranchCondition:
     def from_dict(cls, data: dict[str, Any] | None) -> BranchCondition:
         if not data:
             return cls()
+
+        # Reject silently-ignored keys. The previous behaviour was to
+        # treat unknown keys as no-ops, which meant branches with typos
+        # (or with features not yet implemented like "any_keyword")
+        # matched every single turn.
+        unknown = set(data.keys()) - _ALLOWED_WHEN_KEYS
+        if unknown:
+            raise ValueError(
+                "unknown branch condition keys: "
+                + ", ".join(sorted(unknown))
+                + f" (allowed: {sorted(_ALLOWED_WHEN_KEYS)})"
+            )
+
         return cls(
             qualification_status=data.get("qualification_status"),
             min_score=data.get("min_score"),

@@ -283,7 +283,7 @@ export default function Dashboard() {
                 </tr>
               </thead>
               <tbody>
-                {campaigns.map((c, i) => {
+                {campaigns.map((c) => {
                   const s = statusStyles[c.status];
                   const pct = Math.round((c.called / c.leads) * 100);
                   return (

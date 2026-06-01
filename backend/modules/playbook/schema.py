@@ -61,6 +61,27 @@ class PlaybookBranchInput(BaseModel):
     when: dict[str, Any] = Field(default_factory=dict)
     then: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("when")
+    @classmethod
+    def _validate_when(cls, v: dict[str, Any]) -> dict[str, Any]:
+        """Reject unsupported condition keys at API time.
+
+        Without this, a typo (or an aspirational key like ``any_keyword``)
+        silently became an always-true branch.
+        """
+        # Import lazily to avoid circular import (branches imports
+        # qualification, which lives in modules.ai).
+        from modules.playbook.branches import _ALLOWED_WHEN_KEYS
+
+        unknown = set(v.keys()) - _ALLOWED_WHEN_KEYS
+        if unknown:
+            raise ValueError(
+                "unknown branch condition keys: "
+                + ", ".join(sorted(unknown))
+                + f" (allowed: {sorted(_ALLOWED_WHEN_KEYS)})"
+            )
+        return v
+
 
 # ---------------------------------------------------------------------------
 # Create / update

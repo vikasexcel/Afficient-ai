@@ -224,7 +224,12 @@ def _qualification_block(
 _DEFAULT_CONTEXT: dict[str, str] = {
     "agent_name": "Aifficient Agent",
     "company": "our company",
-    "lead_name": "there",
+    # When the lead's name is unknown, we want the rendered prompt to
+    # read naturally ("on a live phone call with the prospect" rather
+    # than the previous "with there"). The greeting fallback ("hi
+    # there") is still safe because the persona templates phrase it
+    # explicitly.
+    "lead_name": "the prospect",
     "product": "our platform",
     "value_prop": "we help teams ship better outbound calls.",
     "objective": "",
