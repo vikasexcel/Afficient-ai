@@ -144,7 +144,7 @@ class TelephonyCall(BaseModel):
 
     # Failure / retry bookkeeping
     error_code: Mapped[str | None] = mapped_column(
-        String(16), nullable=True
+        String(64), nullable=True
     )
     error_message: Mapped[str | None] = mapped_column(
         Text, nullable=True
