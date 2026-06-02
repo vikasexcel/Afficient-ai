@@ -19,16 +19,18 @@ export default function Settings() {
   const admin = canManageMembers(me?.role);
   return (
     <AppLayout>
-      <div className="space-y-8 max-w-5xl">
+      <div className="space-y-6 sm:space-y-8 max-w-5xl">
         <div>
-          <h1 className="text-2xl font-medium text-white">Settings</h1>
+          <h1 className="text-xl sm:text-2xl font-medium text-white">
+            Settings
+          </h1>
           <p className="text-[13px] text-white/40 mt-1">
             Manage your organization and account
           </p>
         </div>
 
         <Tabs defaultValue={admin ? "members" : "profile"}>
-          <TabsList className="bg-transparent border-b border-white/[0.05] rounded-none w-full justify-start h-auto p-0 gap-1">
+          <TabsList className="bg-transparent border-b border-white/[0.05] rounded-none w-full justify-start h-auto p-0 gap-1 overflow-x-auto flex-nowrap">
             {admin && (
               <>
                 <TabsTrigger

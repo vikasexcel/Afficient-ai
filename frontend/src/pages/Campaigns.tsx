@@ -35,9 +35,11 @@ export default function Campaigns() {
   return (
     <AppLayout>
       <div className="max-w-6xl space-y-6">
-        <div className="flex justify-between items-start gap-4">
-          <div>
-            <h1 className="text-2xl font-medium text-white">Campaigns</h1>
+        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-3">
+          <div className="min-w-0">
+            <h1 className="text-xl sm:text-2xl font-medium text-white">
+              Campaigns
+            </h1>
             <p className="text-[13px] text-white/40 mt-1">
               {canCreate
                 ? "Configure AI outbound campaigns, schedule them, and launch when ready"
@@ -46,10 +48,12 @@ export default function Campaigns() {
           </div>
 
           {canCreate && (
-            <CreateCampaignDialog
-              onCreated={refreshDrafts}
-              onDraftSaved={refreshDrafts}
-            />
+            <div className="self-start sm:self-auto">
+              <CreateCampaignDialog
+                onCreated={refreshDrafts}
+                onDraftSaved={refreshDrafts}
+              />
+            </div>
           )}
         </div>
 

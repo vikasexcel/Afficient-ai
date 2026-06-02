@@ -60,18 +60,22 @@
 
 import { useNavigate, useLocation } from "react-router-dom";
 import { useState } from "react";
+import { Menu } from "lucide-react";
 import { logout } from "@/services/auth";
 import { useAuth } from "@/store/auth";
 import { useMe } from "@/store/me";
+import { useUI } from "@/store/ui";
 
 const routeLabels: Record<string, string> = {
-  "/dashboard":  "Dashboard",
-  "/campaigns":  "Campaigns",
-  "/leads":      "Leads",
-  "/calls":      "Calls",
-  "/analytics":  "Analytics",
-  "/transcripts":"Transcripts",
-  "/settings":   "Settings",
+  "/dashboard":    "Dashboard",
+  "/campaigns":    "Campaigns",
+  "/leads":        "Leads",
+  "/calls":        "Calls",
+  "/analytics":    "Analytics",
+  "/transcripts":  "Transcripts",
+  "/playbooks":    "Playbooks",
+  "/settings":     "Settings",
+  "/documentation":"Documentation",
 };
 
 function initials(name?: string) {
@@ -99,6 +103,7 @@ export default function Header() {
   const refresh  = useAuth((s) => s.refreshToken);
   const user     = useMe((s) => s.data);
   const resetMe  = useMe((s) => s.reset);
+  const toggleSidebar = useUI((s) => s.toggleSidebar);
 
   const [menuOpen, setMenuOpen]   = useState(false);
   const [signing,  setSigning]    = useState(false);
@@ -117,24 +122,44 @@ export default function Header() {
   }
 
   return (
-    <header className="h-[52px] border-b border-white/[0.05] flex items-center justify-between px-6 bg-[#07070a] relative z-10">
+    <header className="h-[52px] border-b border-white/[0.05] flex items-center justify-between gap-2 px-3 sm:px-6 bg-[#07070a] relative z-10">
 
-      {/* Left — breadcrumb */}
-      <div className="flex items-center gap-2 text-[13px]">
-        <span className="text-white/25">{user?.organization?.name ?? "Aifficient"}</span>
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white/15">
+      {/* Left — hamburger (mobile) + breadcrumb */}
+      <div className="flex items-center gap-2 text-[13px] min-w-0">
+        <button
+          type="button"
+          aria-label="Open menu"
+          onClick={toggleSidebar}
+          className="lg:hidden flex items-center justify-center w-8 h-8 rounded-[7px] border border-white/[0.08] text-white/55 hover:text-white hover:border-white/[0.15] transition-colors"
+        >
+          <Menu size={15} />
+        </button>
+        <span className="text-white/25 hidden sm:inline truncate max-w-[140px] md:max-w-none">
+          {user?.organization?.name ?? "Aifficient"}
+        </span>
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="text-white/15 hidden sm:inline"
+        >
           <polyline points="9 18 15 12 9 6" />
         </svg>
-        <span className="text-white/80 font-medium">{pageLabel}</span>
+        <span className="text-white/80 font-medium truncate">{pageLabel}</span>
       </div>
 
       {/* Right — actions */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
 
         {/* Search */}
         <button
           aria-label="Search"
-          className="w-8 h-8 flex items-center justify-center rounded-[7px] border border-white/[0.08] text-white/35 hover:text-white/70 hover:border-white/[0.15] transition-all"
+          className="hidden sm:flex w-8 h-8 items-center justify-center rounded-[7px] border border-white/[0.08] text-white/35 hover:text-white/70 hover:border-white/[0.15] transition-all"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
@@ -155,7 +180,7 @@ export default function Header() {
         </button>
 
         {/* Divider */}
-        <div className="w-px h-5 bg-white/[0.07] mx-1" />
+        <div className="hidden sm:block w-px h-5 bg-white/[0.07] mx-1" />
 
         {/* Avatar menu */}
         <div className="relative">
@@ -218,7 +243,7 @@ export default function Header() {
                   },
                   {
                     label: "Documentation",
-                    onClick: () => setMenuOpen(false),
+                    onClick: () => { setMenuOpen(false); nav("/documentation"); },
                     icon: (
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />

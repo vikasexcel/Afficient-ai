@@ -13,6 +13,7 @@ import Analytics from "@/pages/Analytics";
 import Transcripts from "@/pages/Transcripts";
 import Playbooks from "@/pages/Playbooks";
 import Settings from "@/pages/Settings";
+import Documentation from "@/pages/Documentation";
 import ProtectedRoute from "@/router/ProtectedRoute";
 import { Link } from "react-router-dom";
 
@@ -127,6 +128,15 @@ export const router =
       element: (
         <ProtectedRoute>
           <Settings />
+        </ProtectedRoute>
+      ),
+    },
+
+    {
+      path: "/documentation",
+      element: (
+        <ProtectedRoute>
+          <Documentation />
         </ProtectedRoute>
       ),
     },

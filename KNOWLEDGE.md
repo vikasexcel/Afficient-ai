@@ -202,7 +202,7 @@ afficient-ai/
         │   └── ProtectedRoute.tsx  redirects to /login when no token
         │
         ├── pages/
-        │   ├── Home.tsx            marketing landing
+        │   ├── Home.tsx            marketing landing (fully responsive hero/nav/feature grid)
         │   ├── Login.tsx           login form (react-hook-form)
         │   ├── Signup.tsx          signup form
         │   ├── Dashboard.tsx       dashboard (mostly placeholder)
@@ -211,10 +211,11 @@ afficient-ai/
         │   ├── Leads.tsx           **mock data**, no backend
         │   ├── Analytics.tsx       **mock data**, no backend
         │   ├── Transcripts.tsx     real data from /ai/calls + per-call transcript/summary
-        │   └── Settings.tsx        Tabs: Members / Organization / Profile / Appearance / Security
+        │   ├── Settings.tsx        Tabs: Members / Organization / Profile / Appearance / Security
+        │   └── Documentation.tsx   in-app docs hub (sticky left nav, search, 10 sections + FAQ + perms table)
         │
         ├── components/
-        │   ├── layout/             AppLayout (sidebar+header shell), Sidebar, Header
+        │   ├── layout/             AppLayout (sidebar+header shell), Sidebar (mobile drawer), Header (hamburger + dropdown nav)
         │   ├── settings/           MembersCard, OrganizationCard, ProfileCard, AppearanceCard, SecurityCard
         │   ├── members/            MembersTable, InviteMemberDialog
         │   ├── campaign/           CreateCampaignDialog
@@ -236,7 +237,8 @@ afficient-ai/
         │   ├── me.ts               current user profile + role/org + RBAC helpers
         │   ├── livekit.ts          Room + participants + connect/disconnect/toggleMic
         │   ├── ai.ts               conversation state (bubbles, qualification, summary, send/finalize)
-        │   └── appearance.ts       density preference (comfortable / compact)
+        │   ├── appearance.ts       density preference (comfortable / compact)
+        │   └── ui.ts               global UI state — sidebarOpen + open/close/toggle (mobile drawer)
         │
         ├── lib/
         │   ├── interceptor.ts      axios req: attach Bearer; res: 401 → refresh → retry
@@ -286,6 +288,7 @@ afficient-ai/
 | Analytics | **mock data only** | `pages/Analytics.tsx` |
 | Transcripts | Real calls from `GET /ai/calls`, per-call transcript from `GET /ai/calls/{id}/transcript`, summary + qualification, finalize + export JSON | `pages/Transcripts.tsx`, `services/ai.ts` |
 | Settings | tabs: Members, Organization, Profile, Appearance, Security | gated by role via `store/me.ts` helpers |
+| Documentation | in-app docs hub: sticky topic nav + search, 10 sections (getting started, campaigns, playbooks, leads, calls, analytics, transcripts, settings, roles & permissions, FAQ). Reached from the avatar dropdown in `Header.tsx` | `pages/Documentation.tsx` |
 
 ---
 
@@ -304,7 +307,9 @@ All frontend routes are declared in `frontend/src/router/index.tsx`:
 | `/leads` | `Leads` | yes |
 | `/analytics` | `Analytics` | yes |
 | `/transcripts` | `Transcripts` | yes |
+| `/playbooks` | `Playbooks` | yes |
 | `/settings` | `Settings` (Tabs UI) | yes |
+| `/documentation` | `Documentation` | yes |
 
 `ProtectedRoute` reads the access token from `useAuth` and redirects to `/login` when missing.
 
@@ -341,6 +346,7 @@ Zustand is used throughout the frontend. There is **no Redux, Context, or React 
 | `useLiveKit` (`store/livekit.ts`) | Live `Room` instance + participants + mic state | in-memory only |
 | `useAI` (`store/ai.ts`) | Active call_id, persona, framework, chat bubbles, qualification snapshot, summary. Actions: `start`, `send` (→ `/ai/converse`), `finalize`, `refreshQualification`, `loadTranscript`, `reset` | in-memory only |
 | `useAppearance` (`store/appearance.ts`) | UI density (`comfortable`/`compact`); writes `data-density` attribute on `<html>` | `localStorage` key `afficient-density` |
+| `useUI` (`store/ui.ts`) | Global UI toggles — currently `sidebarOpen` for the mobile drawer; actions: `openSidebar`, `closeSidebar`, `toggleSidebar`. Consumed by `Header` (hamburger) and `Sidebar` (drawer transform + backdrop + Esc/route-change auto-close) | in-memory only |
 
 Bootstrapping (`App.tsx`):
 
@@ -476,6 +482,51 @@ Many components were originally authored against a dark surface (e.g. `text-whit
 
 - Theme picker (Dark / Light / System) → calls `setTheme()` from `next-themes`
 - Density picker (Comfortable / Compact) → calls `useAppearance.setDensity()`
+
+---
+
+## 9.5. Responsive Design
+
+The frontend is built mobile-first against Tailwind v4 breakpoints: `sm` 640px, `md` 768px, `lg` 1024px, `xl` 1280px. A 2026-06-02 sweep covered every page and the layout shell.
+
+### Shell
+
+- **Sidebar as drawer below `lg`.** `components/layout/Sidebar.tsx` is `fixed inset-y-0 left-0 z-40` with `-translate-x-full` by default, and slides in via `translate-x-0` driven by `useUI.sidebarOpen`. On `lg+` it becomes `lg:static lg:translate-x-0` (no transition). A backdrop `div` (`bg-black/50`, `lg:hidden`) closes the drawer on tap. Side-effects in `useEffect`: auto-close on route change, lock `body` scroll while open, close on `Escape`.
+- **Header hamburger.** `components/layout/Header.tsx` renders a `Menu` icon button (`lg:hidden`) that calls `useUI.toggleSidebar()`. Header padding tightens on mobile (`px-3 sm:px-6`); breadcrumbs use `truncate` and the leading crumb is `hidden sm:inline`. Search button + divider are `hidden sm:flex` / `hidden sm:block` to free up space on phones.
+- **Main content padding.** `AppLayout.tsx` main is `p-4 sm:p-6 lg:p-8`. Under `html[data-density="compact"]` the values step down via media queries in `index.css`.
+
+### Global safety nets (`frontend/src/index.css`)
+
+```css
+body { overflow-x: hidden; }
+html, body { max-width: 100%; }
+img, svg, video, canvas { max-width: 100%; }
+```
+
+These prevent runaway horizontal scroll if any descendant overflows.
+
+### Per-page patterns
+
+| Page | Adaptation |
+|---|---|
+| `Home` | Nav and hero scale via `px-4 sm:px-6 lg:px-10`, headline `text-[34px] sm:text-[44px] md:text-[54px] lg:text-[62px]`. Stats grid `grid-cols-1 sm:grid-cols-3` with conditional `border-b`/`border-r` flips. Feature grid `grid-cols-1 md:grid-cols-3`. CTAs `flex-col sm:flex-row` with `w-full max-w-[320px]` clamp on mobile. |
+| `Login` / `Signup` | Left branding panel narrows on tablets (`w-[380px] xl:w-[420px]`); right form panel `px-4 sm:px-6 py-10 sm:py-14`. |
+| `Dashboard` | Metric & funnel grids `grid-cols-2 lg:grid-cols-4`. Campaigns table wrapped in `overflow-x-auto` with `min-w-[640px]` and `whitespace-nowrap` headers. |
+| `Leads` | Header `flex-col sm:flex-row` with `flex-wrap` actions. Below `md`, the status filter renders as a native `<select>`; above `md`, the original button group. |
+| `Calls` | Mode tabs `overflow-x-auto max-w-full` with `whitespace-nowrap shrink-0` buttons. Live room `grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px]`. AI assistant panel `h-[520px] sm:h-[600px] lg:h-[640px] lg:sticky lg:top-4`. Phone dialer `grid-cols-1 lg:grid-cols-[380px_minmax(0,1fr)]`. |
+| `Analytics` | Range selector scrolls horizontally on phones; progress bars `hidden sm:block` to keep cards readable. |
+| `Transcripts` | Split view collapses to a stacked layout `grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)]`; list pane capped at `max-h-[420px] lg:max-h-none` so detail is reachable on mobile. |
+| `Playbooks` | Sidebar list collapses above the editor (`max-h-[260px] lg:max-h-none`); action bar `flex-col sm:flex-row`. |
+| `Campaigns` | Header stacks; CTA `self-start sm:self-auto`. |
+| `Settings` | `TabsList` uses `overflow-x-auto flex-nowrap` so all tabs remain reachable on narrow widths. |
+| `Documentation` | Sidebar nav stacks above the article column below `lg` (`grid-cols-1 lg:grid-cols-[240px_minmax(0,1fr)]`); permissions matrix is `overflow-x-auto` with `min-w-[520px]`. |
+
+### Reusable building blocks
+
+- `flex-col sm:flex-row` headers — stack on mobile, side-by-side on tablet+.
+- `overflow-x-auto` + `min-w-[N]` + `whitespace-nowrap` — preserves wide tables/tab strips.
+- `flex-wrap` action rows — buttons drop to the next line instead of overflowing.
+- `truncate` + `min-w-0` — keeps long IDs, emails, and breadcrumbs in their column.
 
 ---
 
@@ -807,6 +858,7 @@ curl -sS -X POST -d 'CallSid=PROBE' \
 14. **Rate limiting at the edge.** Async Redis sliding window scoped by **JWT subject when present, client IP otherwise**. Configurable per bucket: `RATE_LIMIT_REQUESTS` (default 300/min for API) and `RATE_LIMIT_AUTH_REQUESTS` (default 10/min for `/auth/login`, `/auth/register`, `/auth/refresh`). Exempts `/health`, `/`, `/api/v1/telephony/webhooks/*`, `/docs`, `/openapi.json`, `/redoc`, `/favicon.ico`, and all `OPTIONS` preflights. Disable via `RATE_LIMIT_ENABLED=false` in tests/load-gen.
 15. **Production safety guards.** `main.py` lifespan emits `app.startup.unsafe` errors when `ENV=production` and any of: `TWILIO_VALIDATE_SIGNATURE=false`, `TWILIO_ACCOUNT_SID` starts with `ACdummy`, or `JWT_SECRET` is shorter than 32 chars. `TwilioClient.create_call` raises `TelephonyConfigError` instead of mock-originating when the SID is a dummy and `ENV=production`.
 16. **Tenant isolation enforced at the row level.** Cross-tenant access to AI call transcripts, playbooks, telephony calls, campaigns, workflows and executions returns `404` (never `200` with empty data, never `500`). Audit log filters via the org's `Memberships` set; lower-role users only see their own audit rows.
+17. **Mobile-first responsive UI.** The shell uses an off-canvas drawer below `lg` with body-scroll-lock and Esc/route-change auto-close, plus global `overflow-x: hidden` and `max-width: 100%` safety nets. Wide content (tables, tab strips, permission matrices) uses `overflow-x-auto` + `min-w` rather than collapsing. Layout state for the drawer lives in `store/ui.ts` (Zustand) so any descendant can toggle without prop drilling. See §9.5.
 
 ---
 
@@ -906,3 +958,5 @@ If something is genuinely unclear from reading the code, write **"Not clearly de
 *Last full review: 2026-06-01 — covers the post-E2E security and stability pass: hardened `/auth/audit`, `/campaigns/*`, `/ai/calls/*/transcript`; proper HTTP semantics for login/register/refresh/logout; password strength rules; campaign worker rebuilt on `OpenAIClient`; async/JWT-scoped Redis rate limiter with path exemptions; playbook branch-key whitelist; Twilio production guards; N+1 fix on `/ai/calls`; frontend `tsc -b && vite build` clean; new pytest suite (`backend/tests/`, 29 cases); external-service `healthcheck.py`. Re-scan whenever you suspect drift.*
 
 *2026-06-02 — added §12.I (Twilio webhook / ngrok wiring) and a §14 note covering the pm2-20158 vs uvicorn-8001 port mismatch that caused "We're sorry, an application error has occurred." on inbound calls. Dev convention is now: ngrok `handmade-agreed-dimple.ngrok-free.dev` → uvicorn on port `8001`; keep pm2 `afficient-be` stopped while running dev uvicorn.*
+
+*2026-06-02 — frontend responsive overhaul: every page and the layout shell now adapts cleanly from 360px phones up through 4K desktops. New `store/ui.ts` Zustand store drives an off-canvas mobile drawer; `Sidebar` and `Header` were refactored to consume it. Added global `overflow-x: hidden` / `max-width: 100%` safety nets in `index.css`. Tables and tab strips use horizontal scroll instead of collapsing. New documentation section: `pages/Documentation.tsx` mounted at `/documentation` (protected), reachable from the avatar dropdown in `Header.tsx`. See new §9.5 (Responsive Design) and updated §3/§4/§5/§6/§13.*

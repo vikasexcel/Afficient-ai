@@ -125,7 +125,7 @@ export default function Signup() {
     <div className="min-h-screen bg-[#07070a] flex font-sans">
 
       {/* Left panel — branding */}
-      <div className="hidden lg:flex w-[440px] flex-shrink-0 flex-col justify-between p-10 border-r border-white/[0.05] relative overflow-hidden">
+      <div className="hidden lg:flex w-[380px] xl:w-[440px] flex-shrink-0 flex-col justify-between p-8 xl:p-10 border-r border-white/[0.05] relative overflow-hidden">
         {/* Glow */}
         <div
           className="absolute inset-0 pointer-events-none"
@@ -182,7 +182,7 @@ export default function Signup() {
       </div>
 
       {/* Right panel — form */}
-      <div className="flex-1 flex items-center justify-center px-6 py-14">
+      <div className="flex-1 flex items-center justify-center px-4 sm:px-6 py-10 sm:py-14">
         <div className="w-full max-w-[400px]">
 
           {/* Mobile logo */}

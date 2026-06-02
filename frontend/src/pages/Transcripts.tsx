@@ -111,9 +111,11 @@ export default function Transcripts() {
   return (
     <AppLayout>
       <div className="space-y-5 max-w-6xl">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-medium text-white">Transcripts</h1>
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="text-xl sm:text-2xl font-medium text-white">
+              Transcripts
+            </h1>
             <p className="text-[13px] text-white/40 mt-1">
               Real call transcripts and AI-generated summaries from GPT-4o.
             </p>
@@ -121,7 +123,7 @@ export default function Transcripts() {
           <Button
             variant="outline"
             size="sm"
-            className="border-white/[0.08] bg-white/[0.03] text-white/80 hover:bg-white/[0.06] hover:text-white"
+            className="border-white/[0.08] bg-white/[0.03] text-white/80 hover:bg-white/[0.06] hover:text-white self-start"
             onClick={loadCalls}
             disabled={loadingList}
           >
@@ -133,8 +135,8 @@ export default function Transcripts() {
           </Button>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-[360px_1fr] gap-4 min-h-[640px]">
-          <div className="rounded-[12px] border border-white/[0.06] bg-white/[0.02] overflow-hidden flex flex-col">
+        <div className="grid grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[360px_minmax(0,1fr)] gap-4 lg:min-h-[640px]">
+          <div className="rounded-[12px] border border-white/[0.06] bg-white/[0.02] overflow-hidden flex flex-col max-h-[420px] lg:max-h-none">
             <div className="p-3 border-b border-white/[0.05]">
               <div className="relative">
                 <Search
@@ -320,11 +322,11 @@ function TranscriptDetail({
 
   return (
     <div className="rounded-[12px] border border-white/[0.06] bg-white/[0.02] flex flex-col overflow-hidden">
-      <div className="p-5 border-b border-white/[0.05]">
-        <div className="flex items-start justify-between gap-3">
+      <div className="p-4 sm:p-5 border-b border-white/[0.05]">
+        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h2 className="text-[15px] font-mono text-white truncate">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-[14px] sm:text-[15px] font-mono text-white truncate min-w-0 max-w-full">
                 {call.call_id}
               </h2>
               <span
@@ -344,7 +346,7 @@ function TranscriptDetail({
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-2 flex-wrap">
             <Button
               variant="outline"
               size="sm"
@@ -377,7 +379,7 @@ function TranscriptDetail({
           </div>
         </div>
 
-        <div className="flex items-center gap-4 mt-4 text-[11px] text-white/50">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-4 text-[11px] text-white/50">
           <span className="inline-flex items-center gap-1">
             <Clock size={12} />
             {formatRelative(call.updated_at)}
@@ -385,7 +387,7 @@ function TranscriptDetail({
           <span>{call.total_turns} turns</span>
           <span>{call.total_tokens} tokens</span>
           {call.qualification_score != null && (
-            <span className="ml-auto text-violet-300">
+            <span className="sm:ml-auto text-violet-300">
               score {call.qualification_score}/100
             </span>
           )}

@@ -253,15 +253,17 @@ export default function Playbooks() {
   return (
     <AppLayout>
       <div className="max-w-6xl space-y-5">
-        <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div>
-            <h1 className="text-[22px] font-semibold text-white">Playbooks</h1>
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="text-[20px] sm:text-[22px] font-semibold text-white">
+              Playbooks
+            </h1>
             <p className="text-[13px] text-white/45 mt-0.5">
               Set up how the AI agent talks, qualifies, and adapts on a call.
               No code.
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <Button
               variant="outline"
               size="sm"
@@ -280,9 +282,9 @@ export default function Playbooks() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-5 items-start">
+        <div className="grid grid-cols-1 lg:grid-cols-[260px_minmax(0,1fr)] xl:grid-cols-[280px_minmax(0,1fr)] gap-4 lg:gap-5 items-start">
           {/* SIDEBAR */}
-          <div className="bg-white/[0.03] border border-white/[0.07] rounded-[12px] p-2 space-y-1">
+          <div className="bg-white/[0.03] border border-white/[0.07] rounded-[12px] p-2 space-y-1 max-h-[260px] lg:max-h-none overflow-y-auto">
             {loading && (
               <div className="flex items-center gap-2 text-[12px] text-white/45 p-2">
                 <Loader2 size={14} className="animate-spin" /> Loading…
@@ -556,7 +558,7 @@ export default function Playbooks() {
 
               {/* Action bar */}
               {canEdit && (
-                <div className="sticky bottom-3 z-10 bg-black/60 backdrop-blur border border-white/[0.08] rounded-[12px] px-3 py-2 flex flex-wrap gap-2 items-center justify-between">
+                <div className="sticky bottom-2 sm:bottom-3 z-10 bg-black/60 backdrop-blur border border-white/[0.08] rounded-[12px] px-3 py-2 flex flex-col sm:flex-row sm:flex-wrap gap-2 sm:items-center sm:justify-between">
                   <div className="flex flex-wrap gap-2">
                     <Button size="sm" onClick={handleSave} disabled={saving}>
                       {saving ? (

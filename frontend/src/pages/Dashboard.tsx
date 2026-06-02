@@ -166,21 +166,23 @@ const today = new Date().toLocaleDateString("en-GB", {
 export default function Dashboard() {
   return (
     <AppLayout>
-      <div className="space-y-8">
+      <div className="space-y-6 sm:space-y-8">
 
         {/* Page header */}
-        <div className="flex items-start justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
           <div>
             <h1
-              className="text-[22px] font-semibold text-white"
+              className="text-[20px] sm:text-[22px] font-semibold text-white"
               style={{ fontFamily: "'DM Serif Display', serif" }}
             >
               Dashboard
             </h1>
-            <p className="text-[13px] text-white/35 mt-0.5">{today}</p>
+            <p className="text-[12px] sm:text-[13px] text-white/35 mt-0.5">
+              {today}
+            </p>
           </div>
-          <Link to="/campaigns">
-            <button className="flex items-center gap-1.5 bg-violet-600 hover:bg-violet-500 transition-colors text-white text-[12px] font-semibold px-3.5 py-2 rounded-[8px]">
+          <Link to="/campaigns" className="shrink-0">
+            <button className="flex items-center gap-1.5 bg-violet-600 hover:bg-violet-500 transition-colors text-white text-[12px] font-semibold px-3.5 py-2 rounded-[8px] whitespace-nowrap">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
                 <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
               </svg>
@@ -190,7 +192,7 @@ export default function Dashboard() {
         </div>
 
         {/* Metric cards */}
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           {metrics.map((m) => (
             <div
               key={m.label}
@@ -223,16 +225,24 @@ export default function Dashboard() {
         </div>
 
         {/* Funnel row */}
-        <div className="grid grid-cols-4 gap-0 bg-white/[0.02] border border-white/[0.06] rounded-[10px] overflow-hidden">
+        <div className="grid grid-cols-2 lg:grid-cols-4 bg-white/[0.02] border border-white/[0.06] rounded-[10px] overflow-hidden">
           {[
             { label: "Leads uploaded", val: 1240, pct: 100 },
             { label: "Contacted", val: 1016, pct: 82 },
             { label: "Qualified", val: 284, pct: 23 },
             { label: "Meetings booked", val: 101, pct: 8 },
-          ].map((s, i) => (
+          ].map((s, i) => {
+            // Mobile 2x2 grid: only items in the first row need a bottom
+            // divider, and odd-indexed items are rightmost so they skip the
+            // right border. Desktop is a single 4-col row — every item gets a
+            // right border except the last.
+            const mobileBorderB = i < 2 ? "border-b lg:border-b-0" : "";
+            const mobileBorderR = i % 2 === 0 ? "border-r" : "lg:border-r";
+            const desktopLast = i === 3 ? "lg:border-r-0" : "";
+            return (
             <div
               key={s.label}
-              className="px-5 py-4 border-r border-white/[0.06] last:border-r-0"
+              className={`px-4 sm:px-5 py-4 border-white/[0.06] ${mobileBorderB} ${mobileBorderR} ${desktopLast}`}
             >
               <div className="text-[11px] text-white/30 mb-2">{s.label}</div>
               <div
@@ -253,7 +263,8 @@ export default function Dashboard() {
               </div>
               <div className="text-[10px] text-white/20 mt-1.5">{s.pct}% of total</div>
             </div>
-          ))}
+            );
+          })}
         </div>
 
         {/* Campaigns table */}
@@ -269,13 +280,14 @@ export default function Dashboard() {
           </div>
 
           <div className="bg-white/[0.02] border border-white/[0.07] rounded-[10px] overflow-hidden">
-            <table className="w-full text-[13px] border-collapse">
+            <div className="overflow-x-auto">
+            <table className="w-full min-w-[640px] text-[13px] border-collapse">
               <thead>
                 <tr className="border-b border-white/[0.06]">
                   {["Campaign", "Status", "Leads", "Called", "Meetings", "Conv. rate"].map((h) => (
                     <th
                       key={h}
-                      className="text-left px-4 py-3 text-[11px] font-medium text-white/25 tracking-wide"
+                      className="text-left px-4 py-3 text-[11px] font-medium text-white/25 tracking-wide whitespace-nowrap"
                     >
                       {h}
                     </th>
@@ -348,6 +360,7 @@ export default function Dashboard() {
                 })}
               </tbody>
             </table>
+            </div>
           </div>
         </div>
 

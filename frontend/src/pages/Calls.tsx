@@ -125,19 +125,19 @@ export default function Calls() {
       <div className="max-w-6xl space-y-6">
         <div>
           <h1
-            className="text-[22px] font-semibold text-white"
+            className="text-[20px] sm:text-[22px] font-semibold text-white"
             style={{ fontFamily: "'DM Serif Display', serif" }}
           >
             Calls
           </h1>
-          <p className="text-[13px] text-white/35 mt-0.5">
+          <p className="text-[12px] sm:text-[13px] text-white/35 mt-0.5">
             LiveKit audio rooms · GPT-4o assistant · Deepgram transcription ·
             Twilio outbound dialer
           </p>
         </div>
 
         {/* Mode tabs: browser-test room vs. real PSTN dialer */}
-        <div className="inline-flex rounded-[10px] border border-white/[0.07] bg-white/[0.02] p-1">
+        <div className="inline-flex max-w-full overflow-x-auto rounded-[10px] border border-white/[0.07] bg-white/[0.02] p-1">
           <button
             type="button"
             onClick={() => setMode("browser")}
@@ -177,7 +177,7 @@ export default function Calls() {
               personas={playbooks}
             />
           ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-5 items-start">
+            <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_380px] gap-5 items-start">
               <LiveRoom
                 roomName={roomName ?? ""}
                 participants={participants}
@@ -307,14 +307,14 @@ function LiveRoom({
 }) {
   return (
     <div className="space-y-5">
-      <div className="bg-white/[0.03] border border-white/[0.07] rounded-[12px] p-5">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <span className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-violet-500/15 text-violet-300">
+      <div className="bg-white/[0.03] border border-white/[0.07] rounded-[12px] p-4 sm:p-5">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-violet-500/15 text-violet-300 shrink-0">
               <Radio size={15} />
             </span>
-            <div>
-              <div className="text-[14px] font-semibold text-white">
+            <div className="min-w-0">
+              <div className="text-[14px] font-semibold text-white truncate">
                 {roomName}
               </div>
               <div className="text-[11px] text-white/35">
@@ -324,7 +324,7 @@ function LiveRoom({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <Button
               variant={micEnabled ? "secondary" : "destructive"}
               size="sm"
@@ -425,13 +425,13 @@ function LiveTranscribePanel({ roomName }: { roomName: string }) {
   }
 
   return (
-    <div className="rounded-[12px] border border-white/[0.07] bg-white/[0.02] p-5">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="inline-flex items-center justify-center w-7 h-7 rounded-[7px] bg-sky-500/15 text-sky-300">
+    <div className="rounded-[12px] border border-white/[0.07] bg-white/[0.02] p-4 sm:p-5">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="inline-flex items-center justify-center w-7 h-7 rounded-[7px] bg-sky-500/15 text-sky-300 shrink-0">
             <Waves size={13} />
           </span>
-          <div>
+          <div className="min-w-0">
             <div className="text-[13px] font-medium text-white">
               Live transcribe
             </div>
@@ -441,7 +441,7 @@ function LiveTranscribePanel({ roomName }: { roomName: string }) {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           <select
             value={duration}
             onChange={(e) => setDuration(Number(e.target.value))}
@@ -531,17 +531,19 @@ function AIAssistantPanel() {
   if (!callId) return null;
 
   return (
-    <div className="rounded-[12px] border border-white/[0.07] bg-white/[0.02] flex flex-col h-[640px] sticky top-4">
-      <div className="px-4 py-3 border-b border-white/[0.05] flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="inline-flex items-center justify-center w-7 h-7 rounded-[7px] bg-violet-500/15 text-violet-300">
+    <div className="rounded-[12px] border border-white/[0.07] bg-white/[0.02] flex flex-col h-[520px] sm:h-[600px] lg:h-[640px] lg:sticky lg:top-4">
+      <div className="px-4 py-3 border-b border-white/[0.05] flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="inline-flex items-center justify-center w-7 h-7 rounded-[7px] bg-violet-500/15 text-violet-300 shrink-0">
             <Sparkles size={13} />
           </span>
-          <div>
+          <div className="min-w-0">
             <div className="text-[13px] font-medium text-white">
               GPT-4o assistant
             </div>
-            <div className="text-[11px] text-white/40">call · {callId}</div>
+            <div className="text-[11px] text-white/40 truncate">
+              call · {callId}
+            </div>
           </div>
         </div>
         <Button
@@ -697,7 +699,7 @@ function PhoneDialerSection({
   }, [calls]);
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[420px_1fr] gap-5 items-start">
+    <div className="grid grid-cols-1 lg:grid-cols-[380px_minmax(0,1fr)] xl:grid-cols-[420px_minmax(0,1fr)] gap-5 items-start">
       <DialerForm
         playbooks={playbooks}
         defaultPlaybookId={defaultPlaybookId}
@@ -966,9 +968,9 @@ function CallRow({
 
   return (
     <li className="px-4 py-3">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div className="min-w-0">
-          <div className="flex items-center gap-2 text-[13px] text-white">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-white">
             <span className="font-mono">{call.to_number}</span>
             {call.lead_name && (
               <span className="text-white/45">· {call.lead_name}</span>

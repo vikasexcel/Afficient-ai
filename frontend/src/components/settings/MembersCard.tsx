@@ -113,8 +113,8 @@ export default function MembersCard() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="min-w-0">
           <h2 className="text-[15px] font-medium text-white">
             Members
           </h2>
@@ -126,7 +126,7 @@ export default function MembersCard() {
         {canManage && (
           <Button
             onClick={() => setInviteOpen(true)}
-            className="bg-violet-600 hover:bg-violet-500 h-8 text-[12px] font-medium"
+            className="bg-violet-600 hover:bg-violet-500 h-8 text-[12px] font-medium self-start sm:self-auto"
           >
             <Plus size={14} className="mr-1.5" />
             Invite member

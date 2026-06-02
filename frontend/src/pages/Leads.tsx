@@ -177,15 +177,15 @@ export default function Leads() {
   return (
     <AppLayout>
       <div className="space-y-6 max-w-6xl">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-medium text-white">Leads</h1>
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="text-xl sm:text-2xl font-medium text-white">Leads</h1>
             <p className="text-[13px] text-white/40 mt-1">
               Manage prospects and pipeline activity. Backend wiring coming soon.
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <LeadUploadDialog
               onImported={(res) =>
                 toast.success(
@@ -216,8 +216,8 @@ export default function Leads() {
         </div>
 
         <div className="rounded-[12px] border border-white/[0.06] bg-white/[0.02]">
-          <div className="flex items-center gap-3 p-3 border-b border-white/[0.05]">
-            <div className="relative flex-1 max-w-sm">
+          <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-3 p-3 border-b border-white/[0.05]">
+            <div className="relative w-full md:flex-1 md:max-w-sm">
               <Search
                 size={14}
                 className="absolute left-2.5 top-1/2 -translate-y-1/2 text-white/35"
@@ -230,7 +230,25 @@ export default function Leads() {
               />
             </div>
 
-            <div className="hidden md:flex items-center gap-1.5">
+            {/* Mobile status filter: native select keeps it ergonomic. */}
+            <div className="md:hidden">
+              <select
+                value={status}
+                onChange={(e) =>
+                  setStatus(e.target.value as LeadStatus | "all")
+                }
+                className="w-full h-9 bg-white/[0.03] border border-white/[0.08] rounded-[8px] px-2.5 text-[13px] text-white outline-none"
+                aria-label="Filter by status"
+              >
+                {STATUS_FILTERS.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="hidden md:flex items-center gap-1.5 flex-wrap">
               <Filter size={12} className="text-white/35" />
               {STATUS_FILTERS.map((s) => {
                 const active = status === s.id;

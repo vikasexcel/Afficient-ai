@@ -121,17 +121,19 @@ export default function Analytics() {
   return (
     <AppLayout>
       <div className="space-y-6 max-w-6xl">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-medium text-white">Analytics</h1>
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="text-xl sm:text-2xl font-medium text-white">
+              Analytics
+            </h1>
             <p className="text-[13px] text-white/40 mt-1">
               Performance overview across calls, leads, and campaigns. Data shown
               is sample.
             </p>
           </div>
 
-          <div className="inline-flex items-center rounded-[8px] border border-white/[0.08] bg-white/[0.02] p-0.5">
-            <CalendarDays size={13} className="text-white/40 ml-2 mr-1" />
+          <div className="inline-flex items-center rounded-[8px] border border-white/[0.08] bg-white/[0.02] p-0.5 overflow-x-auto max-w-full">
+            <CalendarDays size={13} className="text-white/40 ml-2 mr-1 shrink-0" />
             {RANGES.map((r) => {
               const active = range === r.id;
               return (
@@ -140,7 +142,7 @@ export default function Analytics() {
                   type="button"
                   onClick={() => setRange(r.id)}
                   className={cn(
-                    "px-2.5 h-7 rounded-[6px] text-[12px] transition-colors",
+                    "px-2.5 h-7 rounded-[6px] text-[12px] transition-colors whitespace-nowrap shrink-0",
                     active
                       ? "bg-white/[0.06] text-white"
                       : "text-white/55 hover:text-white/85"
@@ -310,7 +312,7 @@ export default function Analytics() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    <div className="w-20 h-1.5 rounded-full bg-white/[0.05] overflow-hidden">
+                    <div className="hidden sm:block w-16 md:w-20 h-1.5 rounded-full bg-white/[0.05] overflow-hidden">
                       <div
                         className="h-full bg-violet-500/70 rounded-full"
                         style={{ width: `${a.rate * 3}%` }}
@@ -346,7 +348,7 @@ export default function Analytics() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    <div className="w-20 h-1.5 rounded-full bg-white/[0.05] overflow-hidden">
+                    <div className="hidden sm:block w-16 md:w-20 h-1.5 rounded-full bg-white/[0.05] overflow-hidden">
                       <div
                         className="h-full bg-emerald-500/70 rounded-full"
                         style={{ width: `${c.conversion * 6}%` }}

@@ -1,87 +1,5 @@
-/*
-import {
-  Home,
-  Layers,
-  Settings,
-} from "lucide-react";
-
-import { Link } from "react-router-dom";
-
-export default function Sidebar() {
-  return (
-    <div
-      className="
-        w-[260px]
-        border-r
-        h-screen
-        bg-zinc-950
-        p-6
-      "
-    >
-      <h1
-        className="
-          text-white
-          font-bold
-          text-xl
-          mb-8
-        "
-      >
-        AIFFICIENT
-      </h1>
-
-      <nav
-        className="
-          space-y-3
-        "
-      >
-        <Link to="/dashboard">
-          <div
-            className="
-              flex
-              gap-3
-              text-zinc-300
-            "
-          >
-            <Home />
-            Dashboard
-          </div>
-        </Link>
-
-        <Link to="/campaigns">
-          <div
-            className="
-              flex
-              gap-3
-              text-zinc-300
-            "
-          >
-            <Layers />
-            Campaigns
-          </div>
-        </Link>
-
-        <Link to="/settings">
-          <div
-            className="
-              flex
-              gap-3
-              text-zinc-300
-            "
-          >
-            <Settings />
-            Settings
-          </div>
-        </Link>
-      </nav>
-    </div>
-  );
-}
-
-*/ 
-
-
-
-import { NavLink } from "react-router-dom";
+import { useEffect } from "react";
+import { NavLink, useLocation } from "react-router-dom";
 import {
   LayoutDashboard,
   Megaphone,
@@ -91,8 +9,10 @@ import {
   BarChart3,
   FileText,
   Settings as SettingsIcon,
+  X,
 } from "lucide-react";
 import { useMe, canAccessWorkspace, canAccessInsights } from "@/store/me";
+import { useUI } from "@/store/ui";
 
 type Item = {
   to: string;
@@ -118,60 +38,110 @@ export default function Sidebar() {
   const workspace = canAccessWorkspace(me?.role);
   const insights = canAccessInsights(me?.role);
 
+  const sidebarOpen = useUI((s) => s.sidebarOpen);
+  const closeSidebar = useUI((s) => s.closeSidebar);
+  const location = useLocation();
+
+  // Auto-close the mobile drawer when the route changes so navigation feels
+  // like a real native drawer rather than leaving the overlay on top.
+  useEffect(() => {
+    closeSidebar();
+  }, [location.pathname, closeSidebar]);
+
+  // Lock body scroll while the mobile drawer is open.
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [sidebarOpen]);
+
+  // Close on Escape when the mobile drawer is open.
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") closeSidebar();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [sidebarOpen, closeSidebar]);
+
   const primary = workspace
     ? PRIMARY
     : [{ to: "/dashboard", label: "Dashboard", icon: LayoutDashboard }];
 
   return (
-    <aside className="w-[232px] h-screen bg-[#07070a] border-r border-white/[0.05] flex flex-col">
-      <div className="sidebar-brand h-[52px] flex items-center px-5 border-b border-white/[0.05]">
-        <span
-          className="text-[13px] font-medium text-white"
-          style={{ letterSpacing: "0.2em" }}
-        >
-          AI<span className="text-violet-300">FF</span>ICIENT
-        </span>
-      </div>
+    <>
+      {/* Mobile backdrop. Sits below the drawer, above page content. */}
+      <div
+        onClick={closeSidebar}
+        aria-hidden
+        className={[
+          "fixed inset-0 z-30 bg-black/60 backdrop-blur-sm transition-opacity lg:hidden",
+          sidebarOpen
+            ? "opacity-100 pointer-events-auto"
+            : "opacity-0 pointer-events-none",
+        ].join(" ")}
+      />
 
-      <nav className="flex-1 overflow-y-auto px-3 py-5">
-        <SectionLabel>Workspace</SectionLabel>
-        <div className="mt-2 space-y-0.5">
-          {primary.map((item) => (
-            <NavItem key={item.to} {...item} />
-          ))}
+      <aside
+        className={[
+          // Base shell — same look as before.
+          "h-screen bg-[#07070a] border-r border-white/[0.05] flex flex-col",
+          // Width: keep the desktop width, full-bleed-ish on mobile but capped.
+          "w-[260px] sm:w-[260px] lg:w-[232px]",
+          // Mobile: off-canvas drawer that slides in.
+          "fixed inset-y-0 left-0 z-40 transition-transform duration-200",
+          sidebarOpen ? "translate-x-0" : "-translate-x-full",
+          // Desktop: static, always visible, no transform.
+          "lg:static lg:translate-x-0 lg:z-auto lg:transition-none",
+        ].join(" ")}
+      >
+        <div className="sidebar-brand h-[52px] flex items-center justify-between px-5 border-b border-white/[0.05]">
+          <span
+            className="text-[13px] font-medium text-white"
+            style={{ letterSpacing: "0.2em" }}
+          >
+            AI<span className="text-violet-300">FF</span>ICIENT
+          </span>
+          {/* Mobile close affordance. Hidden on desktop. */}
+          <button
+            type="button"
+            onClick={closeSidebar}
+            aria-label="Close menu"
+            className="lg:hidden text-white/50 hover:text-white p-1 -mr-1 rounded-md"
+          >
+            <X size={16} />
+          </button>
         </div>
 
-        {insights && (
-          <>
-            <SectionLabel className="mt-7">Insights</SectionLabel>
-            <div className="mt-2 space-y-0.5">
-              {INSIGHTS.map((item) => (
-                <NavItem key={item.to} {...item} />
-              ))}
-            </div>
-          </>
-        )}
-      </nav>
-
-      <div className="p-3 border-t border-white/[0.05] space-y-3">
-        {/* <div className="rounded-[10px] border border-violet-500/20 bg-violet-500/[0.06] p-3">
-          <div className="flex items-center gap-1.5">
-            <Sparkles size={12} className="text-violet-300" />
-            <span className="text-[11px] font-medium text-violet-200">
-              Upgrade to Pro
-            </span>
+        <nav className="flex-1 overflow-y-auto px-3 py-5">
+          <SectionLabel>Workspace</SectionLabel>
+          <div className="mt-2 space-y-0.5">
+            {primary.map((item) => (
+              <NavItem key={item.to} {...item} />
+            ))}
           </div>
-          <p className="mt-1 text-[11px] text-white/40 leading-snug">
-            Unlock unlimited calls and live coaching.
-          </p>
-          <button className="mt-2.5 w-full h-7 rounded-[7px] bg-violet-600 hover:bg-violet-500 text-white text-[11px] font-medium transition-colors">
-            Upgrade
-          </button>
-        </div> */}
 
-        <NavItem to="/settings" label="Settings" icon={SettingsIcon} />
-      </div>
-    </aside>
+          {insights && (
+            <>
+              <SectionLabel className="mt-7">Insights</SectionLabel>
+              <div className="mt-2 space-y-0.5">
+                {INSIGHTS.map((item) => (
+                  <NavItem key={item.to} {...item} />
+                ))}
+              </div>
+            </>
+          )}
+        </nav>
+
+        <div className="p-3 border-t border-white/[0.05] space-y-3">
+          <NavItem to="/settings" label="Settings" icon={SettingsIcon} />
+        </div>
+      </aside>
+    </>
   );
 }
 

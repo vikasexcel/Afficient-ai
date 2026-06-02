@@ -8,10 +8,43 @@
 body {
   margin: 0;
   font-family: Inter, system-ui, sans-serif;
+  /* Prevent the page from horizontally jittering when a child unexpectedly
+   * overflows. Vertical scroll is preserved (the app shell controls scroll
+   * regions explicitly). */
+  overflow-x: hidden;
 }
 
+html, body {
+  /* iOS Safari fix for the dynamic toolbar making 100vh too tall, and a
+   * defensive baseline so absolute children can't make the viewport scroll
+   * horizontally on narrow screens. */
+  max-width: 100%;
+}
+
+/* Long words / IDs / emails inside narrow containers shouldn't push a row
+ * wider than the screen. Pages that need them un-broken (transcript IDs,
+ * temp passwords, etc.) already override with `break-all` or `font-mono`. */
+img, svg, video, canvas {
+  max-width: 100%;
+}
+
+/*
+ * Compact density tightens the main pane padding. Use the same responsive
+ * scale as the JSX (mobile-first) so compact mode doesn't accidentally crowd
+ * narrow viewports.
+ */
 html[data-density="compact"] .app-content {
-  padding: 1.25rem;
+  padding: 0.875rem;
+}
+@media (min-width: 640px) {
+  html[data-density="compact"] .app-content {
+    padding: 1rem;
+  }
+}
+@media (min-width: 1024px) {
+  html[data-density="compact"] .app-content {
+    padding: 1.25rem;
+  }
 }
 
 html[data-density="compact"] .nav-item {
