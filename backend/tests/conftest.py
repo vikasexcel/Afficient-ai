@@ -12,12 +12,19 @@ Two scopes are provided:
 
 Tests assume Postgres + Redis are already running locally on the ports
 configured in ``backend/.env``.
+
+Latency / performance benchmarks register samples into the
+:class:`tests._support.benchmark.BenchmarkRecorder`; ``pytest_sessionfinish``
+writes ``tests/reports/latency_report.json`` + ``performance_report.html``
+whenever the recorder is non-empty.
 """
 
 from __future__ import annotations
 
 import os
+import sys
 import uuid
+from pathlib import Path
 from typing import Iterator
 
 import pytest
@@ -27,6 +34,13 @@ import pytest
 # per-IP budget shared with the rest of the running app. Must be set
 # *before* importing the app so the setting is read at import time.
 os.environ.setdefault("RATE_LIMIT_ENABLED", "false")
+
+
+# Make ``tests/_support`` importable regardless of where pytest is invoked
+# from (``pytest tests/unit`` vs. ``pytest tests``).
+_HERE = Path(__file__).resolve().parent
+if str(_HERE.parent) not in sys.path:
+    sys.path.insert(0, str(_HERE.parent))
 
 
 @pytest.fixture(scope="session")
@@ -86,6 +100,32 @@ def auth_headers(unique_user):
     return {"Authorization": f"Bearer {unique_user['access_token']}"}
 
 
+@pytest.fixture(autouse=True)
+def _reset_async_rate_limit_client():
+    """``common.security.rate_limit`` caches an ``aioredis`` client globally.
+
+    pytest-asyncio spins up a fresh event loop per test, so the cached
+    client (bound to a previous loop) raises
+    ``RuntimeError: Event loop is closed`` on the next async test that
+    touches it. Reset the singleton around every test to keep the suite
+    independent of execution order.
+    """
+
+    try:
+        from common.security import rate_limit
+
+        rate_limit._async_client = None
+    except Exception:
+        pass
+    yield
+    try:
+        from common.security import rate_limit
+
+        rate_limit._async_client = None
+    except Exception:
+        pass
+
+
 @pytest.fixture
 def second_user(client) -> dict:
     """A second tenant — used for cross-org isolation tests."""
@@ -111,3 +151,44 @@ def second_user(client) -> dict:
         "access_token": tokens["access_token"],
         "headers": {"Authorization": f"Bearer {tokens['access_token']}"},
     }
+
+
+# ---------------------------------------------------------------------------
+# Benchmark recorder + reporter session hooks
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def recorder():
+    """Process-wide latency/perf benchmark recorder."""
+
+    from tests._support.benchmark import get_recorder
+
+    return get_recorder()
+
+
+def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - hook
+    """Persist benchmark samples to ``tests/reports/`` when any were recorded."""
+
+    from tests._support.benchmark import get_recorder
+    from tests._support.reporter import (
+        build_payload,
+        format_console_summary,
+        write_reports,
+    )
+
+    rec = get_recorder()
+    if not rec.samples:
+        return
+
+    out = write_reports(rec)
+    payload = build_payload(rec)
+    summary = format_console_summary(payload)
+    try:
+        session.config._get_terminal_writer().line(summary)
+    except Exception:
+        print(summary)
+    if out is not None:
+        print(
+            f"\nReports written to:\n  - {out[0]}\n  - {out[1]}\n"
+        )

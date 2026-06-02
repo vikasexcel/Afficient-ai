@@ -3,10 +3,18 @@ import axios from "axios";
 const API_BASE =
   import.meta.env.VITE_API_URL ?? "http://localhost:8001/api/v1";
 
+// ngrok free tier serves an HTML interstitial to browser clients without
+// this header; the page has no CORS headers, so XHR fails with a generic
+// "blocked by CORS policy" error even though the API CORS config is fine.
+const NGROK_SKIP_WARNING = API_BASE.includes("ngrok")
+  ? { "ngrok-skip-browser-warning": "true" }
+  : {};
+
 export const api = axios.create({
   baseURL: API_BASE,
   headers: {
     "Content-Type": "application/json",
+    ...NGROK_SKIP_WARNING,
   },
 });
 

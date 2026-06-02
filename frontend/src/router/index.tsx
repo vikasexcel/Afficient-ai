@@ -14,6 +14,33 @@ import Transcripts from "@/pages/Transcripts";
 import Playbooks from "@/pages/Playbooks";
 import Settings from "@/pages/Settings";
 import ProtectedRoute from "@/router/ProtectedRoute";
+import { Link } from "react-router-dom";
+
+
+function NotFound() {
+  return (
+    <div className="min-h-screen bg-[#0a0a0f] text-white flex flex-col items-center justify-center gap-4 p-6">
+      <h1 className="text-2xl font-semibold">Page not found</h1>
+      <p className="text-white/50 text-sm text-center max-w-md">
+        This URL doesn&apos;t exist. Try the home page or log in.
+      </p>
+      <div className="flex gap-3">
+        <Link
+          to="/"
+          className="text-sm px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500"
+        >
+          Home
+        </Link>
+        <Link
+          to="/login"
+          className="text-sm px-4 py-2 rounded-lg border border-white/15 hover:bg-white/5"
+        >
+          Log in
+        </Link>
+      </div>
+    </div>
+  );
+}
 
 
 export const router =
@@ -102,5 +129,10 @@ export const router =
           <Settings />
         </ProtectedRoute>
       ),
+    },
+
+    {
+      path: "*",
+      element: <NotFound />,
     },
   ]);

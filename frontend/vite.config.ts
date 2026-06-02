@@ -11,4 +11,18 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  server: {
+    host: '0.0.0.0',
+    port: 20198,
+    strictPort: true,
+    // Allow access via public IP (e.g. http://116.202.210.102:20197/)
+    allowedHosts: true,
+  },
+  preview: {
+    host: '0.0.0.0',
+    port: 20197
+    ,
+    strictPort: true,
+    allowedHosts: true,
+  },
 })

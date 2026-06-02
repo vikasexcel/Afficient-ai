@@ -752,6 +752,41 @@ A one-shot health probe lives at `scripts/healthcheck.py` (or `/tmp/aifficient-h
 
 See `docs/DEPLOY_AWS.md` for a step-by-step AWS guide (S3+CloudFront, App Runner, RDS, ElastiCache, Secrets Manager, LiveKit Cloud).
 
+### I. Twilio webhook / ngrok wiring (dev)
+
+Twilio reaches the backend via a reserved ngrok tunnel. Three things must agree on the port:
+
+1. **`TWILIO_PUBLIC_BASE_URL`** in `backend/.env` — currently `https://handmade-agreed-dimple.ngrok-free.dev` (reserved domain).
+2. **The Twilio number's "A Call Comes In" webhook** in the Twilio Console — `<TWILIO_PUBLIC_BASE_URL>/api/v1/telephony/webhooks/voice`, method `POST`.
+3. **The actual uvicorn port** that ngrok forwards to. Dev convention is **`8001`**.
+
+Start ngrok with the reserved domain bound to whichever uvicorn port you're running:
+
+```bash
+ngrok http --url=handmade-agreed-dimple.ngrok-free.dev 8001
+```
+
+Then start uvicorn on the same port:
+
+```bash
+cd backend && source venv/bin/activate
+uvicorn main:app --host 0.0.0.0 --port 8001 --reload
+```
+
+Verify both legs are healthy:
+
+```bash
+curl -s -o /dev/null -w "local: %{http_code}\n" http://localhost:8001/api/v1/health
+curl -s -o /dev/null -w "ngrok: %{http_code}\n" https://handmade-agreed-dimple.ngrok-free.dev/api/v1/health
+# Webhook (unsigned probe) should return 403 "invalid X-Twilio-Signature" — that's correct.
+curl -sS -X POST -d 'CallSid=PROBE' \
+  https://handmade-agreed-dimple.ngrok-free.dev/api/v1/telephony/webhooks/voice
+```
+
+**Symptom of a misconfigured tunnel:** the caller hears Twilio's built-in fallback **"We're sorry, an application error has occurred. Goodbye."** immediately on answer. Twilio plays this whenever the voice webhook is unreachable / returns 5xx / returns invalid TwiML / times out (>15s). Diagnose by running the two `curl`s above — if the ngrok one fails or returns 502, ngrok and uvicorn are pointing at different ports.
+
+> **Do not run the pm2 process `afficient-be` (port 20158) at the same time** as uvicorn on 8001 — only one of them can own the ngrok tunnel. Pick one. The pm2 entry is preserved for production-style runs; in dev keep it `stopped`.
+
 ---
 
 ## 13. Key Architectural Decisions
@@ -787,6 +822,7 @@ These are real items found while scanning the repo, not speculation.
 - **`TWILIO_VALIDATE_SIGNATURE=false` by default.** Production startup logs an error; flip to `true` once a public URL exists.
 - **ElevenLabs voice id mismatch.** `.env` ships a voice id (`21m00Tcm4TlvDq8ikWAM`) that's not in the configured account — runtime TTS falls back to the default voice. Update `ELEVENLABS_VOICE_ID` or remove it.
 - **CORS allowlist is dev-only** (`main.py` allows `localhost:5173/5174` plus `localhost:20197`). Production frontend origins must be added.
+- **Two backend launch paths can race for the ngrok tunnel.** The pm2 entry `afficient-be` binds port **20158**, but the dev convention is `uvicorn ... --port 8001`. Only one can be live at a time, and the reserved ngrok URL (`handmade-agreed-dimple.ngrok-free.dev`) must be pointed at the matching port — otherwise Twilio webhooks fail and callers hear Twilio's default error message. See §12.I for the canonical dev wiring.
 - **`get_current_org` (`modules/auth/dependencies.py`) is a stub** that returns `{"organization":"current"}` regardless of the user. The AI / campaign / playbook modules sidestep this by reading `organization_id` directly from the tenant dict in their routers. Should be removed or made real.
 - **`run_execution` (`modules/campaign/worker.py`) runs synchronously inside the request thread.** Now async-correct and calls `OpenAIClient`, but still no background queue, despite Celery being in `requirements.txt`. Long-running campaigns will tie up workers.
 - **Duplicate `get_db`** helpers in `database/session.py` and `database/dependencies.py`.
@@ -868,3 +904,5 @@ If something is genuinely unclear from reading the code, write **"Not clearly de
 ---
 
 *Last full review: 2026-06-01 — covers the post-E2E security and stability pass: hardened `/auth/audit`, `/campaigns/*`, `/ai/calls/*/transcript`; proper HTTP semantics for login/register/refresh/logout; password strength rules; campaign worker rebuilt on `OpenAIClient`; async/JWT-scoped Redis rate limiter with path exemptions; playbook branch-key whitelist; Twilio production guards; N+1 fix on `/ai/calls`; frontend `tsc -b && vite build` clean; new pytest suite (`backend/tests/`, 29 cases); external-service `healthcheck.py`. Re-scan whenever you suspect drift.*
+
+*2026-06-02 — added §12.I (Twilio webhook / ngrok wiring) and a §14 note covering the pm2-20158 vs uvicorn-8001 port mismatch that caused "We're sorry, an application error has occurred." on inbound calls. Dev convention is now: ngrok `handmade-agreed-dimple.ngrok-free.dev` → uvicorn on port `8001`; keep pm2 `afficient-be` stopped while running dev uvicorn.*

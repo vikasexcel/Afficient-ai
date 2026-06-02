@@ -78,11 +78,15 @@ app.add_middleware(
         "http://127.0.0.1:20198",
         "http://localhost:20199",
         "http://127.0.0.1:20199",
+        # Vite network URL (public IP) when accessing UI remotely
+        "http://116.202.210.102:20197",
+        "https://handmade-agreed-dimple.ngrok-free.dev",
     ],
-    # In non-production, also accept any localhost/127.0.0.1 port so Vite
-    # fallbacks (e.g. 20198 when 20197 is taken) don't break preflights.
+    # In non-production, accept any localhost/127.0.0.1 port AND any
+    # http(s)://host:port so Vite served on a public IP (e.g. for remote
+    # browser access) doesn't break CORS preflights.
     allow_origin_regex=(
-        None if _is_prod else r"^http://(localhost|127\.0\.0\.1):\d+$"
+        None if _is_prod else r"^https?://[^/]+(:\d+)?$"
     ),
     allow_credentials=True,
     allow_methods=["*"],

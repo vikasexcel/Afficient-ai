@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 
 import AppLayout from "@/components/layout/AppLayout";
+import { microphoneUnavailableReason } from "@/lib/media";
 import { Button } from "@/components/ui/button";
 import { useMe } from "@/store/me";
 import { useLiveKit, type ParticipantInfo } from "@/store/livekit";
@@ -224,8 +225,16 @@ function JoinForm({
   onPersonaChange: (v: string) => void;
   personas: PlaybookSummary[];
 }) {
+  const micWarning = microphoneUnavailableReason();
+
   return (
     <div className="bg-white/[0.03] border border-white/[0.07] rounded-[12px] p-6 max-w-2xl">
+      {micWarning && (
+        <div className="mb-4 px-3 py-2.5 rounded-[8px] bg-amber-500/10 border border-amber-500/25 text-[12px] text-amber-200/90 leading-relaxed">
+          {micWarning}
+        </div>
+      )}
+
       <label className="block text-[11px] font-medium text-white/40 tracking-wide mb-2">
         Room name
       </label>
@@ -263,7 +272,7 @@ function JoinForm({
 
       <Button
         onClick={onJoin}
-        disabled={disabled}
+        disabled={disabled || !!micWarning}
         className="mt-5 w-full bg-violet-600 hover:bg-violet-500 text-white"
       >
         {connecting ? "Joining…" : "Join room"}

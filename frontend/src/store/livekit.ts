@@ -12,6 +12,10 @@ import {
 } from "livekit-client";
 
 import {
+  assertMicrophoneAvailable,
+  normalizeMediaError,
+} from "@/lib/media";
+import {
   createRoom,
   deleteRoom,
   getRoom,
@@ -89,6 +93,7 @@ export const useLiveKit = create<LiveKitStore>((set, get) => ({
     set({ status: "connecting", error: null, roomName, identity });
 
     try {
+      assertMicrophoneAvailable();
       // Ensure the room exists. If creation fails because it already exists,
       // fall back to a plain lookup so we don't surface a misleading error.
       try {
@@ -148,10 +153,9 @@ export const useLiveKit = create<LiveKitStore>((set, get) => ({
         participants: snapshotParticipants(room),
       });
     } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "Failed to join room";
+      const message = normalizeMediaError(err);
       set({ status: "error", error: message, room: null });
-      throw err;
+      throw new Error(message);
     }
   },
 
@@ -176,7 +180,12 @@ export const useLiveKit = create<LiveKitStore>((set, get) => ({
     const { room, micEnabled } = get();
     if (!room) return;
     const next = !micEnabled;
-    await room.localParticipant.setMicrophoneEnabled(next);
+    if (next) assertMicrophoneAvailable();
+    try {
+      await room.localParticipant.setMicrophoneEnabled(next);
+    } catch (err) {
+      throw new Error(normalizeMediaError(err));
+    }
     set({
       micEnabled: next,
       participants: snapshotParticipants(room),
