@@ -60,6 +60,12 @@ from modules.ai.interruption import (
     InterruptionMetrics,
     publish_metrics_snapshot,
 )
+from modules.ai.meeting import (
+    MEETING_STATUS_BOOKED,
+    MEETING_STATUS_NOT_BOOKED,
+    MEETING_STATUS_UNKNOWN,
+    detect_status as detect_meeting_status,
+)
 from modules.ai.qualification import QualificationFramework
 from modules.ai.recovery import (
     HealthRegistry,
@@ -163,9 +169,14 @@ class ConversationOrchestrator:
         organization_id: uuid.UUID | None = None,
         created_by: uuid.UUID | None = None,
         opening_line: str | None = None,
+        voice_id: str | None = None,
+        voice_name: str | None = None,
+        voice_provider: str | None = None,
         sample_rate: int = 48000,
         idle_timeout_seconds: float = 60.0,
         publish_metrics: bool = True,
+        wait_for_human_seconds: float = 0.0,
+        is_phone_call: bool = False,
     ) -> None:
         self._ai = ai
         self._stt_streamer = stt_streamer
@@ -180,9 +191,43 @@ class ConversationOrchestrator:
         self._organization_id = organization_id
         self._created_by = created_by
         self._opening_line = opening_line
+        # Per-playbook voice override. ``None`` → TTS uses the global
+        # ELEVENLABS_VOICE_ID default (backward compatible).
+        self._voice_id = voice_id
+        self._voice_name = voice_name
+        self._voice_provider = voice_provider
+        # VOICE_USED_IN_CALL is logged once, on the first utterance.
+        self._voice_logged = False
         self._sample_rate = sample_rate
         self._idle_timeout_seconds = idle_timeout_seconds
         self._publish_metrics = publish_metrics
+        # PSTN / phone-dialer calls suppress barge-in when
+        # ``settings.PHONE_CALL_BARGE_IN_ENABLED`` is False (default), so PSTN
+        # echo / line noise can't cut the agent off mid-utterance. Browser
+        # test rooms leave this False and keep full barge-in behaviour.
+        self._is_phone_call = is_phone_call
+        # When > 0, the orchestrator waits this long for the human caller
+        # to actually join the LiveKit room before speaking the opening
+        # line. Critical for outbound calls: the agent joins the room at
+        # origination time, ~10-30s before the lead picks up, so without
+        # this gate the ElevenLabs opener plays to an empty room.
+        self._wait_for_human_seconds = wait_for_human_seconds
+
+        # Identities of *our own* agents in the room. STT must ignore the
+        # TTS agent's audio (self-echo → feedback loop) and we must not
+        # mistake an agent for the human when gating the opening line.
+        self._agent_identities: set[str] = {
+            ident
+            for ident in (
+                getattr(stt_streamer, "agent_identity", None),
+                getattr(tts_streamer, "agent_identity", None),
+            )
+            if ident
+        }
+
+        # Meeting booking status — PLACEHOLDER tracking only (no real
+        # scheduling). Surfaced to logs, Redis meta, and the call summary.
+        self._meeting_status = MEETING_STATUS_UNKNOWN
 
         self._stats = OrchestratorStats()
         self._state = _LoopState()
@@ -258,6 +303,22 @@ class ConversationOrchestrator:
         await self._start_call_with_recovery()
 
         self._call_started_at = time.perf_counter()
+        log.info(
+            "ai.orchestrator.CALL_STARTED",
+            call_id=self._call_id,
+            room=self._room,
+            persona=self._persona,
+            playbook_id=str(self._playbook_id) if self._playbook_id else None,
+        )
+        if self._is_phone_call and not settings.PHONE_CALL_BARGE_IN_ENABLED:
+            log.info(
+                "ai.orchestrator.PHONE_BARGE_IN_DISABLED",
+                call_id=self._call_id,
+                room=self._room,
+            )
+        await self._set_meeting_status(
+            MEETING_STATUS_UNKNOWN, reason="call_started"
+        )
         await self._state_machine.transition(
             ConversationState.LISTENING, reason="call_started"
         )
@@ -268,15 +329,28 @@ class ConversationOrchestrator:
                 target_participant=self._target_participant,
                 sample_rate=self._sample_rate,
                 num_channels=1,
+                ignore_identities=self._agent_identities,
             ) as stt_session:
-                # Speak the opening line first so the lead hears something
-                # the moment the agent connects.
-                if self._opening_line:
-                    await self._safe_speak(tts_session, self._opening_line)
+                log.info(
+                    "ai.orchestrator.LIVEKIT_CONNECTED",
+                    call_id=self._call_id,
+                    room=self._room,
+                    ignored_agents=sorted(self._agent_identities),
+                )
+
+                # Gate the opening line on the human actually being in the
+                # room. Otherwise the ElevenLabs opener plays to nobody
+                # (outbound) and the lead only ever hears Twilio's <Say>.
+                await self._await_human_then_open(tts_session)
 
                 loop_task = asyncio.create_task(
                     self._event_loop(stt_session, tts_session),
                     name=f"orch:{self._call_id}",
+                )
+                log.info(
+                    "ai.orchestrator.ORCHESTRATOR_STARTED",
+                    call_id=self._call_id,
+                    room=self._room,
                 )
                 metrics_task = (
                     asyncio.create_task(
@@ -316,6 +390,7 @@ class ConversationOrchestrator:
                 call_id=self._call_id,
                 organization_id=self._organization_id,
                 duration_ms=duration_ms,
+                meeting_status=self._meeting_status,
             )
         except AIError as exc:
             log.warning(
@@ -326,6 +401,15 @@ class ConversationOrchestrator:
         # Final metrics push so the dashboard sees the end state.
         if self._publish_metrics:
             await self._publish_metrics_now()
+
+        log.info(
+            "ai.orchestrator.CALL_ENDED",
+            call_id=self._call_id,
+            room=self._room,
+            duration_ms=duration_ms,
+            turns=self._stats.turns,
+            meeting_status=self._meeting_status,
+        )
 
     async def _start_call_with_recovery(self) -> None:
         """``AIService.start_call`` wrapped in a small retry shell.
@@ -361,6 +445,94 @@ class ConversationOrchestrator:
             raise
 
     # ------------------------------------------------------------------
+    # Opening line / human-join gate
+    # ------------------------------------------------------------------
+
+    async def _await_human_then_open(self, tts_session: "TTSSession") -> None:
+        """Wait for the human to join, then speak the opening line.
+
+        For outbound calls the agent is in the room well before the lead
+        answers. We hold the opening utterance until a non-agent (ideally
+        SIP) participant appears so the lead actually hears it. If the
+        wait is disabled or times out we still speak — better a slightly
+        early opener than dead air.
+        """
+
+        if not self._opening_line:
+            return
+
+        waiter = getattr(tts_session, "wait_for_human", None)
+        if self._wait_for_human_seconds > 0 and callable(waiter):
+            try:
+                human = await waiter(
+                    exclude=self._agent_identities,
+                    timeout=self._wait_for_human_seconds,
+                )
+            except Exception as exc:  # noqa: BLE001 — never block the call
+                log.warning(
+                    "ai.orchestrator.wait_for_human_failed",
+                    call_id=self._call_id,
+                    error=str(exc),
+                )
+                human = None
+
+            if human:
+                log.info(
+                    "ai.orchestrator.CALL_ANSWERED",
+                    call_id=self._call_id,
+                    room=self._room,
+                    participant=human,
+                )
+                # Lock STT onto the caller so we never pick up stray audio.
+                if self._target_participant is None:
+                    self._target_participant = human
+            else:
+                log.warning(
+                    "ai.orchestrator.human_join_timeout",
+                    call_id=self._call_id,
+                    seconds=self._wait_for_human_seconds,
+                )
+
+        # Conversation is now live → flip the placeholder status off
+        # "unknown" before the lead's first turn.
+        await self._set_meeting_status(
+            MEETING_STATUS_NOT_BOOKED, reason="opening_line"
+        )
+        await self._safe_speak(tts_session, self._opening_line, source="opening")
+
+    # ------------------------------------------------------------------
+    # Meeting status (PLACEHOLDER — no real scheduling)
+    # ------------------------------------------------------------------
+
+    async def _set_meeting_status(self, status: str, *, reason: str) -> None:
+        """Record a meeting-status transition: log + Redis meta. No-ops on
+        a repeat of the current status."""
+
+        if status == self._meeting_status:
+            return
+        self._meeting_status = status
+        # Required structured log token + the human-readable bracket form
+        # called out in the spec.
+        log.info(
+            "ai.orchestrator.MEETING_STATUS_UPDATED",
+            call_id=self._call_id,
+            meeting_status=status,
+            reason=reason,
+        )
+        log.info("[MEETING_STATUS] %s", status)
+        # Best-effort persist into the call's Redis meta so dashboards and
+        # the summary path can read it without re-deriving.
+        try:
+            meta = await self._ai.memory.get_meta(self._call_id)
+            meta["meeting_status"] = status
+            await self._ai.memory.set_meta(self._call_id, meta)
+        except Exception:  # noqa: BLE001 — status is best-effort
+            log.warning(
+                "ai.orchestrator.meeting_status_persist_failed",
+                call_id=self._call_id,
+            )
+
+    # ------------------------------------------------------------------
     # Event loop
     # ------------------------------------------------------------------
 
@@ -385,6 +557,8 @@ class ConversationOrchestrator:
                     idle_deadline = time.monotonic() + self._idle_timeout_seconds
 
                 if event.kind == TranscriptEventKind.SPEECH_STARTED:
+                    if self._barge_in_suppressed(tts_session, source="speech_started"):
+                        continue
                     await self._on_speech_started(
                         tts_session, event_ts_ms=event.ts_ms
                     )
@@ -398,6 +572,10 @@ class ConversationOrchestrator:
                         and len(event.text.strip())
                         >= settings.BARGE_IN_PARTIAL_MIN_CHARS
                     ):
+                        if self._barge_in_suppressed(
+                            tts_session, source="partial", partial_text=event.text
+                        ):
+                            continue
                         await self._trigger_barge_in(
                             tts_session,
                             source="partial",
@@ -410,6 +588,12 @@ class ConversationOrchestrator:
                     text = (event.text or "").strip()
                     if not text:
                         continue
+                    log.info(
+                        "ai.orchestrator.STT_TRANSCRIPT_RECEIVED",
+                        call_id=self._call_id,
+                        chars=len(text),
+                        confidence=event.confidence,
+                    )
                     self._state.last_user_finals.append(text)
                     await self._handle_user_turn(tts_session, text)
 
@@ -436,6 +620,35 @@ class ConversationOrchestrator:
     # ------------------------------------------------------------------
     # Barge-in
     # ------------------------------------------------------------------
+
+    def _barge_in_suppressed(
+        self,
+        tts_session: TTSSession,
+        *,
+        source: str,
+        partial_text: str | None = None,
+    ) -> bool:
+        """Whether barge-in should be ignored for this (phone) call.
+
+        Only suppresses while the AI is actively speaking on a PSTN/phone
+        call with ``PHONE_CALL_BARGE_IN_ENABLED`` off. Browser test rooms
+        (``is_phone_call=False``) are never suppressed, and listening-state
+        SPEECH_STARTED events (no active utterance) pass through so normal
+        turn tracking is preserved.
+        """
+
+        if not self._is_phone_call or settings.PHONE_CALL_BARGE_IN_ENABLED:
+            return False
+        if not tts_session.is_speaking:
+            return False
+
+        log.info(
+            "ai.orchestrator.PHONE_BARGE_IN_IGNORED",
+            call_id=self._call_id,
+            source=source,
+            partial_text=partial_text,
+        )
+        return True
 
     async def _on_speech_started(
         self,
@@ -506,6 +719,13 @@ class ConversationOrchestrator:
         await self._interruption_log.record(event)
 
         log.info(
+            "ai.orchestrator.BARGE_IN_TRIGGERED",
+            call_id=self._call_id,
+            source=source,
+            partial_text=partial_text,
+            was_speaking=result.was_speaking,
+        )
+        log.info(
             "ai.orchestrator.barge_in",
             call_id=self._call_id,
             source=source,
@@ -514,6 +734,7 @@ class ConversationOrchestrator:
             silence_latency_ms=result.silence_latency_ms,
             dropped_buffer_ms=result.dropped_buffer_ms,
             was_speaking=result.was_speaking,
+            partial_text=partial_text,
         )
 
     # ------------------------------------------------------------------
@@ -580,6 +801,38 @@ class ConversationOrchestrator:
         if self._stats.first_reply_ms is None:
             self._stats.first_reply_ms = result.stats.latency_ms
 
+        reply_text = result.reply or ""
+        log.info(
+            "ai.orchestrator.GPT_RESPONSE_GENERATED",
+            call_id=self._call_id,
+            turn=self._stats.turns,
+            latency_ms=result.stats.latency_ms,
+            reply_chars=len(reply_text),
+            qualification_status=result.qualification.status,
+        )
+        log.info(
+            "ai.orchestrator.GPT_RESPONSE_LENGTH",
+            call_id=self._call_id,
+            chars=len(reply_text),
+            words=len(reply_text.split()),
+        )
+        # respond_turn persists both transcript rows (user + assistant)
+        # inside AIService before returning.
+        log.info(
+            "ai.orchestrator.TRANSCRIPT_SAVED",
+            call_id=self._call_id,
+            turn=self._stats.turns,
+            history_length=result.history_length,
+        )
+
+        # PLACEHOLDER meeting-status detection over this turn.
+        new_status = detect_meeting_status(
+            current=self._meeting_status,
+            user_text=user_text,
+            agent_text=result.reply or "",
+        )
+        await self._set_meeting_status(new_status, reason="turn")
+
         if result.qualification.status == "disqualified":
             await self._state_machine.transition(
                 ConversationState.AI_SPEAKING, reason="disqualified"
@@ -605,7 +858,7 @@ class ConversationOrchestrator:
         await self._state_machine.transition(
             ConversationState.AI_SPEAKING, reason="ai_reply"
         )
-        await self._safe_speak(tts_session, result.reply)
+        await self._safe_speak(tts_session, reply_text)
 
     # ------------------------------------------------------------------
     # Recovery
@@ -662,13 +915,97 @@ class ConversationOrchestrator:
                 ConversationState.AI_SPEAKING, reason=f"speak:{source}"
             )
 
+        # Resolve the voice once and log VOICE_USED_IN_CALL on first speak.
+        # Priority: per-playbook voice_id → global ELEVENLABS_VOICE_ID. A
+        # custom Voice ID configured on the playbook is already stored in
+        # ``voice_id``, so it transparently takes precedence here.
+        voice_id = self._voice_id or None
+        if not self._voice_logged:
+            self._voice_logged = True
+            log.info(
+                "ai.orchestrator.VOICE_USED_IN_CALL",
+                call_id=self._call_id,
+                provider=self._voice_provider or "elevenlabs",
+                voice_id=voice_id or settings.ELEVENLABS_VOICE_ID or None,
+                voice_name=self._voice_name
+                or ("default" if not voice_id else None),
+                source="playbook" if voice_id else "env_default",
+            )
+
         async def _runner() -> None:
+            tts_started = time.monotonic()
+            log.info(
+                "ai.orchestrator.TTS_TEXT_LENGTH",
+                call_id=self._call_id,
+                source=source,
+                chars=len(text),
+            )
+            log.info(
+                "ai.orchestrator.AUDIO_PLAYBACK_STARTED",
+                call_id=self._call_id,
+                source=source,
+                chars=len(text),
+            )
             try:
-                await tts_session.speak(text, wait_for_playout=False)
-            except BargeInInterrupted:
+                stats = await tts_session.speak(
+                    text, voice_id=voice_id, wait_for_playout=False
+                )
+                sample_rate = settings.ELEVENLABS_SAMPLE_RATE
+                bytes_streamed = getattr(stats, "bytes_streamed", 0) or 0
+                audio_duration_ms = int(
+                    bytes_streamed / max(sample_rate * 2, 1) * 1000
+                )
+                log.info(
+                    "ai.orchestrator.TTS_AUDIO_GENERATED",
+                    call_id=self._call_id,
+                    source=source,
+                    chars=len(text),
+                    bytes_streamed=bytes_streamed,
+                    ttfb_ms=getattr(stats, "ttfb_ms", None),
+                    stream_end_ms=getattr(stats, "stream_end_ms", None),
+                )
+                log.info(
+                    "ai.orchestrator.TTS_AUDIO_DURATION",
+                    call_id=self._call_id,
+                    source=source,
+                    audio_duration_ms=audio_duration_ms,
+                    bytes_streamed=bytes_streamed,
+                    sample_rate=sample_rate,
+                )
+                log.info(
+                    "ai.orchestrator.AUDIO_PUBLISHED",
+                    call_id=self._call_id,
+                    source=source,
+                )
+                log.info(
+                    "ai.orchestrator.AUDIO_PLAYBACK_COMPLETED",
+                    call_id=self._call_id,
+                    source=source,
+                    pump_elapsed_ms=int((time.monotonic() - tts_started) * 1000),
+                    audio_duration_ms=audio_duration_ms,
+                )
+            except BargeInInterrupted as exc:
+                partial = getattr(exc, "partial", None)
+                bytes_streamed = (
+                    getattr(partial, "bytes_streamed", 0) if partial else 0
+                )
+                sample_rate = settings.ELEVENLABS_SAMPLE_RATE
+                partial_audio_ms = int(
+                    bytes_streamed / max(sample_rate * 2, 1) * 1000
+                )
+                log.info(
+                    "ai.orchestrator.AUDIO_INTERRUPTED",
+                    call_id=self._call_id,
+                    source=source,
+                    chars_requested=len(text),
+                    bytes_streamed_before_interrupt=bytes_streamed,
+                    partial_audio_duration_ms=partial_audio_ms,
+                    pump_elapsed_ms=int((time.monotonic() - tts_started) * 1000),
+                )
                 log.info(
                     "ai.orchestrator.tts_interrupted",
                     call_id=self._call_id,
+                    source=source,
                 )
             except TTSError as exc:
                 self._stats.tts_errors += 1

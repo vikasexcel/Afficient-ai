@@ -14,6 +14,7 @@ and live in their own modules.
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass, field
 from typing import AsyncIterator
 
@@ -48,6 +49,9 @@ class _TransportState:
     track: rtc.LocalAudioTrack | None = None
     queues: dict[str, asyncio.Queue[AudioFrame]] = field(default_factory=dict)
     closed: bool = False
+    # Set whenever a remote participant joins so :meth:`wait_for_remote`
+    # can wake up without busy-polling the room.
+    participant_event: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 class AudioTransport:
@@ -61,12 +65,19 @@ class AudioTransport:
         sample_rate: int = DEFAULT_SAMPLE_RATE,
         num_channels: int = DEFAULT_CHANNELS,
         publish_track_name: str = "agent-audio",
+        ignore_identities: set[str] | None = None,
     ) -> None:
         self._token = token
         self._url = url or settings.LIVEKIT_URL
         self._sample_rate = sample_rate
         self._num_channels = num_channels
         self._publish_track_name = publish_track_name
+        # Remote participants whose audio we must NEVER pump into the
+        # inbound queues — most importantly the agent's own TTS track.
+        # Without this the STT agent transcribes the agent's own voice,
+        # which triggers self barge-in and a feedback loop that breaks
+        # multi-turn conversation.
+        self._ignore_identities = set(ignore_identities or ())
         self._state = _TransportState()
 
     # ------------------------------------------------------------------
@@ -271,12 +282,30 @@ class AudioTransport:
         ) -> None:
             if track.kind != rtc.TrackKind.KIND_AUDIO:
                 return
+            if participant.identity in self._ignore_identities:
+                # The agent's own TTS track (or a sibling agent). Never
+                # pump it into STT — it would cause self-transcription.
+                log.info(
+                    "livekit.transport.track_ignored",
+                    participant=participant.identity,
+                    track_sid=track.sid,
+                )
+                return
             log.info(
                 "livekit.transport.track_subscribed",
                 participant=participant.identity,
                 track_sid=track.sid,
             )
             asyncio.create_task(self._pump_remote_audio(track, participant))
+
+        @room.on("participant_connected")
+        def _on_participant_connected(p: rtc.RemoteParticipant) -> None:
+            log.info(
+                "livekit.transport.participant_connected",
+                identity=p.identity,
+                kind=getattr(p, "kind", None),
+            )
+            self._state.participant_event.set()
 
         @room.on("participant_disconnected")
         def _on_participant_disconnected(p: rtc.RemoteParticipant) -> None:
@@ -288,6 +317,73 @@ class AudioTransport:
         @room.on("disconnected")
         def _on_disconnected(*_: object) -> None:
             log.info("livekit.transport.room_disconnected")
+
+    # ------------------------------------------------------------------
+    # Participant discovery (used to gate the opening line on the human
+    # actually joining, and to target STT at the caller).
+    # ------------------------------------------------------------------
+
+    def find_human_identity(
+        self, *, exclude: set[str] | None = None
+    ) -> str | None:
+        """Return the identity of the human caller in the room, if present.
+
+        Prefers a SIP participant (the PSTN leg bridged in by Twilio),
+        then falls back to any remote participant that is not an agent
+        (e.g. a browser tester). ``exclude`` augments the transport-level
+        ignore set so callers can additionally skip known agent
+        identities.
+        """
+
+        room = self._state.room
+        if room is None:
+            return None
+        skip = self._ignore_identities | set(exclude or ())
+        fallback: str | None = None
+        try:
+            participants = dict(room.remote_participants)
+        except Exception:  # pragma: no cover — defensive
+            return None
+        for identity, participant in participants.items():
+            if identity in skip:
+                continue
+            kind = getattr(participant, "kind", None)
+            if kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
+                return identity
+            if fallback is None:
+                fallback = identity
+        return fallback
+
+    async def wait_for_remote(
+        self,
+        *,
+        exclude: set[str] | None = None,
+        timeout: float = 30.0,
+    ) -> str | None:
+        """Block until a human caller joins the room (or ``timeout``).
+
+        Returns the human participant identity, or ``None`` if the
+        timeout elapsed without anyone (other than agents) joining.
+        """
+
+        deadline = time.monotonic() + max(0.0, timeout)
+        while True:
+            identity = self.find_human_identity(exclude=exclude)
+            if identity is not None:
+                return identity
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            self._state.participant_event.clear()
+            try:
+                await asyncio.wait_for(
+                    self._state.participant_event.wait(),
+                    timeout=min(remaining, 1.0),
+                )
+            except asyncio.TimeoutError:
+                # Re-check the roster: a participant may already have been
+                # present before we started waiting on the event.
+                continue
 
     async def _pump_remote_audio(
         self,

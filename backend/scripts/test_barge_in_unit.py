@@ -201,7 +201,14 @@ class _FakeTTSSession:
     def is_speaking(self) -> bool:
         return self._speaking
 
-    async def speak(self, text: str, *, wait_for_playout: bool = True):
+    async def speak(
+        self,
+        text: str,
+        *,
+        voice_id: str | None = None,
+        model_id: str | None = None,
+        wait_for_playout: bool = True,
+    ):
         self._speaking = True
         try:
             # "Speak" by sleeping for a bounded time; barge-in cancels this.
@@ -624,6 +631,101 @@ class OrchestratorIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(
             orch.stats.interruption_metrics.by_source.get("partial", 0), 1
         )
+
+    async def test_phone_call_barge_in_suppressed(self):
+        """On a phone call with the flag off, SPEECH_STARTED/PARTIAL while the
+        agent is speaking must NOT trigger barge-in (TTS plays to completion)."""
+        from config.settings import settings as _s
+        from modules.ai.orchestrator import ConversationOrchestrator
+
+        events = [
+            TranscriptEvent(
+                kind=TranscriptEventKind.FINAL,
+                text="please keep talking for a while",
+                is_final=True,
+                ts_ms=100,
+            ),
+            TranscriptEvent(
+                kind=TranscriptEventKind.SPEECH_STARTED,
+                text="",
+                is_final=False,
+                ts_ms=300,
+            ),
+            TranscriptEvent(
+                kind=TranscriptEventKind.PARTIAL,
+                text="hold on",
+                is_final=False,
+                ts_ms=400,
+            ),
+        ]
+
+        with patch.object(_s, "PHONE_CALL_BARGE_IN_ENABLED", False):
+            ai = _FakeAIService()
+            tts_session = _FakeTTSSession()
+            tts_streamer = _FakeTTSStreamer(tts_session)
+            stt_session = _FakeSTTSession(events)
+            stt_streamer = _FakeSTTStreamer(stt_session)
+            orch = ConversationOrchestrator(
+                ai=ai,  # type: ignore[arg-type]
+                stt_streamer=stt_streamer,  # type: ignore[arg-type]
+                tts_streamer=tts_streamer,  # type: ignore[arg-type]
+                room="r-test",
+                call_id="c-test",
+                idle_timeout_seconds=2.0,
+                publish_metrics=False,
+                is_phone_call=True,
+            )
+            async with orch.run():
+                await asyncio.sleep(0.8)
+                orch.stop()
+
+        self.assertEqual(orch.stats.barge_ins, 0)
+        self.assertEqual(tts_session.interrupt_count, 0)
+        # The agent's reply should have played to completion (speak() only
+        # appends to `spoken` when it is NOT interrupted).
+        self.assertGreaterEqual(len(tts_session.spoken), 1)
+
+    async def test_phone_call_barge_in_enabled_still_interrupts(self):
+        """Phone call WITH the flag on keeps normal barge-in (browser parity)."""
+        from config.settings import settings as _s
+        from modules.ai.orchestrator import ConversationOrchestrator
+
+        events = [
+            TranscriptEvent(
+                kind=TranscriptEventKind.FINAL,
+                text="please keep talking for a while",
+                is_final=True,
+                ts_ms=100,
+            ),
+            TranscriptEvent(
+                kind=TranscriptEventKind.PARTIAL,
+                text="hold on",
+                is_final=False,
+                ts_ms=400,
+            ),
+        ]
+
+        with patch.object(_s, "PHONE_CALL_BARGE_IN_ENABLED", True):
+            ai = _FakeAIService()
+            tts_session = _FakeTTSSession()
+            tts_streamer = _FakeTTSStreamer(tts_session)
+            stt_session = _FakeSTTSession(events)
+            stt_streamer = _FakeSTTStreamer(stt_session)
+            orch = ConversationOrchestrator(
+                ai=ai,  # type: ignore[arg-type]
+                stt_streamer=stt_streamer,  # type: ignore[arg-type]
+                tts_streamer=tts_streamer,  # type: ignore[arg-type]
+                room="r-test",
+                call_id="c-test",
+                idle_timeout_seconds=2.0,
+                publish_metrics=False,
+                is_phone_call=True,
+            )
+            async with orch.run():
+                await asyncio.sleep(0.8)
+                orch.stop()
+
+        self.assertGreaterEqual(orch.stats.barge_ins, 1)
 
 
 if __name__ == "__main__":

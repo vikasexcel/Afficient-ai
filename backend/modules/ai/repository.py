@@ -172,6 +172,43 @@ class AITranscriptRepository:
             "total_tokens": int(total or 0),
         }
 
+    @staticmethod
+    def aggregate_many(
+        db: Session, call_ids: Sequence[str]
+    ) -> dict[str, dict[str, int | None]]:
+        """Bulk turn-count / token / duration aggregates for many calls.
+
+        Used by the calls listing to surface transcript data for calls
+        that have **not** been finalized yet (no summary row). Duration is
+        derived from the span between the first and last transcript row so
+        the UI can show a wall-clock figure before end-of-call summary.
+        """
+
+        if not call_ids:
+            return {}
+        stmt = (
+            select(
+                AITranscriptEntry.call_id,
+                func.count(AITranscriptEntry.id),
+                func.coalesce(func.sum(AITranscriptEntry.total_tokens), 0),
+                func.min(AITranscriptEntry.created_at),
+                func.max(AITranscriptEntry.created_at),
+            )
+            .where(AITranscriptEntry.call_id.in_(list(call_ids)))
+            .group_by(AITranscriptEntry.call_id)
+        )
+        out: dict[str, dict[str, int | None]] = {}
+        for cid, turns, total_tokens, first_at, last_at in db.execute(stmt).all():
+            duration_ms: int | None = None
+            if first_at is not None and last_at is not None and last_at > first_at:
+                duration_ms = int((last_at - first_at).total_seconds() * 1000)
+            out[cid] = {
+                "total_turns": int(turns or 0),
+                "total_tokens": int(total_tokens or 0),
+                "duration_ms": duration_ms,
+            }
+        return out
+
 
 class AICallSummaryRepository:
     """Upserts to ``ai_call_summaries``."""

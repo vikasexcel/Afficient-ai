@@ -273,6 +273,35 @@ def render_system_prompt(
     if extra_context:
         ctx.update({k: ("" if v is None else str(v)) for k, v in extra_context.items()})
 
+    company_block = ""
+    agent_block = ""
+    objection_block = ""
+    if playbook is not None:
+        from modules.playbook.company import (
+            apply_company_to_prompt_context,
+            company_prompt_block,
+            resolve_agent_name,
+            resolve_company_profile,
+        )
+
+        profile = resolve_company_profile(playbook)
+        apply_company_to_prompt_context(ctx, profile)
+        company_block = company_prompt_block(profile)
+
+        agent_name = resolve_agent_name(playbook)
+        ctx["agent_name"] = agent_name
+        agent_block = (
+            f"Agent Name: {agent_name}\n"
+            f"Always identify yourself as {agent_name}. If the prospect asks who "
+            f"you are, respond with this name."
+        )
+
+        from modules.playbook.objections import objection_prompt_block, parse_objections
+
+        objection_block = objection_prompt_block(
+            parse_objections(playbook.objections)
+        )
+
     ctx["qualification_block"] = _qualification_block(framework, playbook)
 
     class _SafeDict(dict):
@@ -285,6 +314,12 @@ def render_system_prompt(
         else p.template
     )
     rendered = template.format_map(_SafeDict(ctx)).strip()
+    if agent_block:
+        rendered = f"{rendered}\n\n{agent_block}"
+    if company_block:
+        rendered = f"{rendered}\n\n{company_block}"
+    if objection_block:
+        rendered = f"{rendered}\n\n{objection_block}"
     dynamic = (extra_context or {}).get("dynamic_block") if extra_context else None
     if dynamic:
         rendered = f"{rendered}\n\n{str(dynamic).strip()}"

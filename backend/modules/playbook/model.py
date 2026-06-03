@@ -104,6 +104,11 @@ class Playbook(BaseModel):
     persona_name: Mapped[str] = mapped_column(
         String(64), default="outbound_sdr"
     )
+
+    # Friendly name the AI uses to introduce itself on calls. Nullable for
+    # backward compatibility; falls back to "AI Assistant" when unset.
+    agent_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
     system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     opening_line: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -111,8 +116,32 @@ class Playbook(BaseModel):
         String(255), nullable=True
     )
 
-    # Optional ElevenLabs voice override (per-playbook agent voice).
+    # Per-playbook agent voice configuration. ``voice_id`` is the resolved
+    # provider voice identifier passed to TTS at call time (an ElevenLabs
+    # voice id today). The remaining columns are human-readable metadata so
+    # the UI can render dropdowns without exposing raw ids, and so additional
+    # providers (OpenAI TTS, Azure Speech, ...) can be supported later.
+    voice_provider: Mapped[str | None] = mapped_column(
+        String(32), nullable=True
+    )
     voice_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    voice_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    voice_gender: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    voice_accent: Mapped[str | None] = mapped_column(
+        String(32), nullable=True
+    )
+    voice_language: Mapped[str | None] = mapped_column(
+        String(16), nullable=True
+    )
+
+    # Company introduction — used in opening line + system prompt. Nullable for
+    # backward compatibility with playbooks that only use ``default_context``.
+    company_name: Mapped[str | None] = mapped_column(
+        String(120), nullable=True
+    )
+    company_intro: Mapped[str | None] = mapped_column(Text, nullable=True)
+    company_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    value_proposition: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # {company, product, value_prop, ...} merged into render_system_prompt.
     default_context: Mapped[dict | None] = mapped_column(
@@ -128,6 +157,10 @@ class Playbook(BaseModel):
 
     # Declarative branch rules — see :mod:`modules.playbook.branches`.
     branches: Mapped[list | None] = mapped_column(JSON, nullable=True)
+
+    # Objection handling rules — see :mod:`modules.playbook.objections`.
+    # Nullable for backward compatibility (no rules == current GPT behaviour).
+    objections: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 

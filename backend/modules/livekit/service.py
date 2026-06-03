@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import AsyncIterator
 
@@ -170,6 +171,106 @@ class LiveKitService:
             raise LiveKitError(f"failed to delete room: {exc}") from exc
         log.info("livekit.room.deleted", name=name)
 
+    async def list_participant_identities(self, room_name: str) -> list[str]:
+        """Return identities of participants currently in ``room_name``.
+
+        Returns an empty list if the room is gone. Used to detect when the
+        PSTN caller hangs up (their SIP participant disappears).
+        """
+
+        client = await self._get_client()
+        try:
+            resp = await client.room.list_participants(
+                lkapi.ListParticipantsRequest(room=room_name)
+            )
+        except Exception as exc:  # noqa: BLE001
+            message = str(exc).lower()
+            if "not found" in message or "does not exist" in message:
+                return []
+            log.warning(
+                "livekit.room.list_participants_failed",
+                room=room_name,
+                error=str(exc),
+            )
+            return []
+        return [p.identity for p in resp.participants]
+
+    # ------------------------------------------------------------------
+    # SIP (LiveKit-originated outbound calls)
+    # ------------------------------------------------------------------
+
+    async def create_sip_participant(
+        self,
+        *,
+        room_name: str,
+        to_number: str,
+        trunk_id: str,
+        identity: str = "sip-caller",
+        display_name: str | None = None,
+        ring_timeout_seconds: float | None = None,
+        wait_until_answered: bool = True,
+    ) -> "SipDialResult":
+        """Dial ``to_number`` over the LiveKit outbound SIP trunk and drop
+        the resulting PSTN participant into ``room_name``.
+
+        When ``wait_until_answered`` is True this blocks until the callee
+        answers (or the call fails), so the caller can map the SIP status
+        to a row update. LiveKit raises on non-answer; we translate the
+        SIP status code into a ``SipDialResult`` instead of bubbling the
+        raw twirp error where possible.
+        """
+
+        client = await self._get_client()
+        ring = ring_timeout_seconds or settings.LIVEKIT_SIP_RING_TIMEOUT_SECONDS
+        req = lkapi.CreateSIPParticipantRequest(
+            sip_trunk_id=trunk_id,
+            sip_call_to=to_number,
+            room_name=room_name,
+            participant_identity=identity,
+            participant_name=display_name or identity,
+            wait_until_answered=wait_until_answered,
+            play_dialtone=False,
+        )
+        # ``ringing_timeout`` is a protobuf Duration; set it if supported.
+        try:
+            req.ringing_timeout.FromSeconds(int(ring))
+        except Exception:  # pragma: no cover - older SDKs
+            pass
+
+        try:
+            info = await client.sip.create_sip_participant(req)
+        except Exception as exc:  # noqa: BLE001 - translate to result
+            status = _extract_sip_status(exc)
+            log.warning(
+                "livekit.sip.create_participant_failed",
+                room=room_name,
+                to=to_number,
+                trunk=trunk_id,
+                status=status,
+                error=str(exc),
+            )
+            return SipDialResult(
+                answered=False,
+                identity=identity,
+                sip_status_code=status,
+                error=str(exc),
+            )
+
+        log.info(
+            "livekit.sip.create_participant",
+            room=room_name,
+            to=to_number,
+            trunk=trunk_id,
+            participant=getattr(info, "participant_identity", identity),
+            sip_call_id=getattr(info, "sip_call_id", None),
+        )
+        return SipDialResult(
+            answered=True,
+            identity=getattr(info, "participant_identity", identity),
+            sip_call_id=getattr(info, "sip_call_id", None),
+            participant_id=getattr(info, "participant_id", None),
+        )
+
     # ------------------------------------------------------------------
     # Tokens
     # ------------------------------------------------------------------
@@ -230,6 +331,32 @@ class LiveKitService:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+@dataclass
+class SipDialResult:
+    """Outcome of a LiveKit-originated SIP dial."""
+
+    answered: bool
+    identity: str
+    sip_call_id: str | None = None
+    participant_id: str | None = None
+    sip_status_code: int | None = None
+    error: str | None = None
+
+
+def _extract_sip_status(exc: Exception) -> int | None:
+    """Best-effort SIP status code from a LiveKit/twirp error."""
+
+    for attr in ("sip_status_code", "code", "status"):
+        val = getattr(exc, attr, None)
+        if isinstance(val, int):
+            return val
+    text = str(exc)
+    for token in ("486", "603", "480", "404", "408", "487", "503"):
+        if token in text:
+            return int(token)
+    return None
 
 
 def _room_to_response(room) -> RoomResponse:

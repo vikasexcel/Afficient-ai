@@ -43,9 +43,17 @@ class CallAgentRunner:
     framework: str | None = None
     playbook_id: uuid.UUID | None = None
     opening_line: str | None = None
+    # Per-playbook voice override (resolved at call-start). When unset the
+    # orchestrator falls back to the global ELEVENLABS_VOICE_ID.
+    voice_id: str | None = None
+    voice_name: str | None = None
+    voice_provider: str | None = None
     extra_context: dict | None = None
     target_participant: str | None = None
     idle_timeout_seconds: float = 90.0
+    # Outbound: the agent joins the room before the lead answers, so hold
+    # the opening line until the caller (SIP participant) actually joins.
+    wait_for_human_seconds: float = 45.0
 
     _task: asyncio.Task | None = field(default=None, init=False, repr=False)
     _orch: ConversationOrchestrator | None = field(
@@ -145,7 +153,12 @@ class CallAgentRunner:
             organization_id=self.organization_id,
             created_by=self.created_by,
             opening_line=self.opening_line,
+            voice_id=self.voice_id,
+            voice_name=self.voice_name,
+            voice_provider=self.voice_provider,
             idle_timeout_seconds=self.idle_timeout_seconds,
+            wait_for_human_seconds=self.wait_for_human_seconds,
+            is_phone_call=True,
         )
 
         try:

@@ -13,6 +13,13 @@ if str(REPO_BACKEND) not in sys.path:
 
 from modules.ai.prompts import render_system_prompt
 from modules.ai.qualification import QualificationFramework, QualificationTracker
+from modules.playbook.company import (
+    DEFAULT_AGENT_NAME,
+    company_prompt_block,
+    resolve_agent_name,
+    resolve_company_profile,
+    resolve_opening_line,
+)
 from modules.playbook.runtime import PlaybookFieldRuntime, PlaybookRuntimeConfig
 from modules.playbook.schema import CreatePlaybookInput, PlaybookFieldInput
 from modules.playbook.seeds import default_playbook_specs
@@ -77,6 +84,84 @@ def test_qualification_weighted_score() -> None:
     print("OK test_qualification_weighted_score")
 
 
+def test_company_prompt_and_opening() -> None:
+    runtime = PlaybookRuntimeConfig(
+        playbook_id=uuid.uuid4(),
+        version=1,
+        name="Co PB",
+        framework="BANT",
+        persona_name="outbound_sdr",
+        company_name="Aifficient",
+        company_intro="We help businesses generate more meetings using AI.",
+        value_proposition="Increase qualified meetings by 3-4x.",
+    )
+    profile = resolve_company_profile(runtime)
+    block = company_prompt_block(profile)
+    assert "Company Name: Aifficient" in block
+    assert "Value Proposition:" in block
+
+    opening = resolve_opening_line(runtime, agent_name="Alex")
+    assert opening is not None
+    assert opening.startswith("Hi, this is Alex from Aifficient.")
+    assert "We help businesses" in opening
+
+    prompt = render_system_prompt(
+        persona="outbound_sdr",
+        framework="BANT",
+        playbook=runtime,
+    )
+    assert "Company Name: Aifficient" in prompt
+    print("OK test_company_prompt_and_opening")
+
+
+def test_agent_name_resolution_and_opening() -> None:
+    # With agent name + company.
+    rt = PlaybookRuntimeConfig(
+        playbook_id=uuid.uuid4(),
+        version=1,
+        name="Agent PB",
+        framework="BANT",
+        persona_name="outbound_sdr",
+        agent_name="Terry",
+        company_name="Aifficient",
+    )
+    assert resolve_agent_name(rt) == "Terry"
+    opening = resolve_opening_line(rt, agent_name=resolve_agent_name(rt))
+    assert opening == "Hi, this is Terry from Aifficient."
+
+    # Agent name, no company.
+    rt2 = PlaybookRuntimeConfig(
+        playbook_id=uuid.uuid4(),
+        version=1,
+        name="Agent PB2",
+        framework="BANT",
+        persona_name="outbound_sdr",
+        agent_name="Sarah",
+    )
+    assert (
+        resolve_opening_line(rt2, agent_name=resolve_agent_name(rt2))
+        == "Hi, this is Sarah."
+    )
+
+    # Backward compat: no agent name, no company -> fallback + no auto opening.
+    rt3 = PlaybookRuntimeConfig(
+        playbook_id=uuid.uuid4(),
+        version=1,
+        name="Legacy",
+        framework="BANT",
+        persona_name="outbound_sdr",
+    )
+    assert resolve_agent_name(rt3) == DEFAULT_AGENT_NAME
+    assert resolve_opening_line(rt3, agent_name=resolve_agent_name(rt3)) is None
+
+    # Prompt injects agent identity.
+    prompt = render_system_prompt(
+        persona="outbound_sdr", framework="BANT", playbook=rt
+    )
+    assert "Agent Name: Terry" in prompt
+    print("OK test_agent_name_resolution_and_opening")
+
+
 def test_field_input_validation() -> None:
     f = PlaybookFieldInput(key="budget", display_name="Budget")
     assert f.key == "budget"
@@ -91,6 +176,8 @@ def main() -> int:
         test_render_with_playbook_fields,
         test_qualification_weighted_score,
         test_field_input_validation,
+        test_company_prompt_and_opening,
+        test_agent_name_resolution_and_opening,
     ]
     failed = 0
     for t in tests:

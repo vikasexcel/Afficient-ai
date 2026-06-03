@@ -8,6 +8,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from common.logging import get_logger
 from modules.ai.prompts import render_system_prompt
 from modules.ai.qualification import (
     QualificationFramework,
@@ -35,6 +36,12 @@ from modules.playbook.repository import (
     PlaybookVersionRepository,
 )
 from modules.playbook.branches import evaluate_branches, parse_branch_rules
+from modules.playbook.company import validate_company_fields
+from modules.playbook.objections import (
+    match_objection,
+    objection_turn_instruction,
+    parse_objections,
+)
 from modules.playbook.runtime import PlaybookFieldRuntime, PlaybookRuntimeConfig
 from modules.playbook.schema import (
     CreatePlaybookInput,
@@ -46,8 +53,26 @@ from modules.playbook.schema import (
     PlaybookTestInput,
     PlaybookTestResponse,
     PlaybookVersionOut,
+    ObjectionMatchOut,
     UpdatePlaybookInput,
 )
+
+log = get_logger("playbook.service")
+
+
+def _log_voice_selected(pb: Playbook, *, action: str) -> None:
+    """Emit ``VOICE_SELECTED`` when a playbook has a voice configured."""
+
+    if not pb.voice_id:
+        return
+    log.info(
+        "playbook.VOICE_SELECTED",
+        action=action,
+        playbook_id=str(pb.id),
+        provider=pb.voice_provider or "elevenlabs",
+        voice_id=pb.voice_id,
+        voice_name=pb.voice_name,
+    )
 
 
 def _field_rows(
@@ -117,13 +142,24 @@ def _serialize_payload(playbook: Playbook, fields: list[PlaybookField]) -> dict:
         "status": playbook.status,
         "framework": playbook.framework,
         "persona_name": playbook.persona_name,
+        "agent_name": playbook.agent_name,
         "system_prompt": playbook.system_prompt,
         "opening_line": playbook.opening_line,
         "default_objective": playbook.default_objective,
+        "voice_provider": playbook.voice_provider,
         "voice_id": playbook.voice_id,
+        "voice_name": playbook.voice_name,
+        "voice_gender": playbook.voice_gender,
+        "voice_accent": playbook.voice_accent,
+        "voice_language": playbook.voice_language,
+        "company_name": playbook.company_name,
+        "company_intro": playbook.company_intro,
+        "company_description": playbook.company_description,
+        "value_proposition": playbook.value_proposition,
         "default_context": playbook.default_context,
         "disqualifying_patterns": playbook.disqualifying_patterns,
         "branches": playbook.branches or [],
+        "objections": playbook.objections or [],
         "version": playbook.version,
         "fields": [
             {
@@ -147,13 +183,24 @@ def _to_runtime(playbook: Playbook, fields: list[PlaybookField]) -> PlaybookRunt
         name=playbook.name,
         framework=playbook.framework,
         persona_name=playbook.persona_name,
+        agent_name=playbook.agent_name,
         system_prompt=playbook.system_prompt,
         opening_line=playbook.opening_line,
         default_objective=playbook.default_objective,
+        voice_provider=playbook.voice_provider,
         voice_id=playbook.voice_id,
+        voice_name=playbook.voice_name,
+        voice_gender=playbook.voice_gender,
+        voice_accent=playbook.voice_accent,
+        voice_language=playbook.voice_language,
+        company_name=playbook.company_name,
+        company_intro=playbook.company_intro,
+        company_description=playbook.company_description,
+        value_proposition=playbook.value_proposition,
         default_context=playbook.default_context,
         disqualifying_patterns=list(playbook.disqualifying_patterns or []),
         branches=list(playbook.branches or []),
+        objections=list(playbook.objections or []),
         fields=[
             PlaybookFieldRuntime(
                 key=f.key,
@@ -178,13 +225,24 @@ def _detail(playbook: Playbook, fields: list[PlaybookField]) -> PlaybookDetail:
         status=playbook.status,  # type: ignore[arg-type]
         framework=playbook.framework,  # type: ignore[arg-type]
         persona_name=playbook.persona_name,
+        agent_name=playbook.agent_name,
         system_prompt=playbook.system_prompt,
         opening_line=playbook.opening_line,
         default_objective=playbook.default_objective,
+        voice_provider=playbook.voice_provider,
         voice_id=playbook.voice_id,
+        voice_name=playbook.voice_name,
+        voice_gender=playbook.voice_gender,
+        voice_accent=playbook.voice_accent,
+        voice_language=playbook.voice_language,
+        company_name=playbook.company_name,
+        company_intro=playbook.company_intro,
+        company_description=playbook.company_description,
+        value_proposition=playbook.value_proposition,
         default_context=playbook.default_context,
         disqualifying_patterns=playbook.disqualifying_patterns,
         branches=playbook.branches,
+        objections=playbook.objections,
         version=playbook.version,
         fields=[
             PlaybookFieldOut(
@@ -237,6 +295,32 @@ class PlaybookService:
         ]
 
     @staticmethod
+    def get_for_dialer(
+        db: Session,
+        organization_id: uuid.UUID,
+        playbook_id: uuid.UUID,
+    ) -> PlaybookDetail:
+        """Load a playbook for the phone dialer and log selection.
+
+        Only **active** (published) playbooks may be used on live calls.
+        """
+
+        detail = PlaybookService.get(db, organization_id, playbook_id)
+        if detail.status != PLAYBOOK_STATUS_ACTIVE:
+            raise PlaybookValidationError(
+                "This playbook must be published before it can be used on a call. "
+                "Open Playbooks and click Publish."
+            )
+        log.info(
+            "playbook.PLAYBOOK_SELECTED",
+            playbook_id=str(playbook_id),
+            playbook_name=detail.name,
+            framework=detail.framework,
+            voice_id=detail.voice_id,
+        )
+        return detail
+
+    @staticmethod
     def get(
         db: Session,
         organization_id: uuid.UUID,
@@ -281,20 +365,37 @@ class PlaybookService:
             status=PLAYBOOK_STATUS_DRAFT,
             framework=data.framework,
             persona_name=data.persona_name,
+            agent_name=data.agent_name,
             system_prompt=data.system_prompt,
             opening_line=data.opening_line,
             default_objective=data.default_objective,
+            voice_provider=data.voice_provider,
             voice_id=data.voice_id,
+            voice_name=data.voice_name,
+            voice_gender=data.voice_gender,
+            voice_accent=data.voice_accent,
+            voice_language=data.voice_language,
+            company_name=data.company_name,
+            company_intro=data.company_intro,
+            company_description=data.company_description,
+            value_proposition=data.value_proposition,
             default_context=data.default_context,
             disqualifying_patterns=data.disqualifying_patterns or None,
             branches=[b.model_dump() for b in data.branches] if data.branches else None,
+            objections=(
+                [o.model_dump() for o in data.objections]
+                if data.objections
+                else None
+            ),
             version=1,
         )
+        validate_company_fields(pb)
         PlaybookRepository.create(db, pb)
         field_rows = _field_rows(pb.id, fields_in)
         PlaybookRepository.replace_fields(db, pb.id, field_rows)
         db.commit()
         db.refresh(pb)
+        _log_voice_selected(pb, action="create")
         return _detail(pb, field_rows)
 
     @staticmethod
@@ -328,20 +429,38 @@ class PlaybookService:
         if data.branches is not None:
             pb.branches = [b.model_dump() for b in data.branches]
 
+        if data.objections is not None:
+            pb.objections = [o.model_dump() for o in data.objections]
+
+        voice_changed = False
         for attr in (
             "description",
             "framework",
             "persona_name",
+            "agent_name",
             "system_prompt",
             "opening_line",
             "default_objective",
+            "voice_provider",
             "voice_id",
+            "voice_name",
+            "voice_gender",
+            "voice_accent",
+            "voice_language",
+            "company_name",
+            "company_intro",
+            "company_description",
+            "value_proposition",
             "default_context",
             "disqualifying_patterns",
         ):
             val = getattr(data, attr)
             if val is not None:
                 setattr(pb, attr, val)
+                if attr.startswith("voice_"):
+                    voice_changed = True
+
+        validate_company_fields(pb)
 
         field_rows: list[PlaybookField] | None = None
         if data.fields is not None:
@@ -350,6 +469,8 @@ class PlaybookService:
 
         db.commit()
         db.refresh(pb)
+        if voice_changed:
+            _log_voice_selected(pb, action="update")
         if field_rows is None:
             field_rows = list(
                 db.query(PlaybookField)
@@ -384,6 +505,8 @@ class PlaybookService:
             raise PlaybookValidationError(
                 "Cannot publish a playbook with no qualification fields"
             )
+
+        validate_company_fields(pb)
 
         pb.version += 1
         pb.status = PLAYBOOK_STATUS_ACTIVE
@@ -460,13 +583,24 @@ class PlaybookService:
             status=PLAYBOOK_STATUS_DRAFT,
             framework=source.framework,
             persona_name=source.persona_name,
+            agent_name=source.agent_name,
             system_prompt=source.system_prompt,
             opening_line=source.opening_line,
             default_objective=source.default_objective,
+            voice_provider=source.voice_provider,
             voice_id=source.voice_id,
+            voice_name=source.voice_name,
+            voice_gender=source.voice_gender,
+            voice_accent=source.voice_accent,
+            voice_language=source.voice_language,
+            company_name=source.company_name,
+            company_intro=source.company_intro,
+            company_description=source.company_description,
+            value_proposition=source.value_proposition,
             default_context=source.default_context,
             disqualifying_patterns=source.disqualifying_patterns,
             branches=list(source.branches or []) if source.branches else None,
+            objections=list(source.objections or []) if source.objections else None,
             version=1,
         )
         PlaybookRepository.create(db, pb)
@@ -540,15 +674,26 @@ class PlaybookService:
                 name=payload.get("name", ""),
                 framework=payload.get("framework", PLAYBOOK_FRAMEWORK_BANT),
                 persona_name=payload.get("persona_name", "outbound_sdr"),
+                agent_name=payload.get("agent_name"),
                 system_prompt=payload.get("system_prompt"),
                 opening_line=payload.get("opening_line"),
                 default_objective=payload.get("default_objective"),
+                voice_provider=payload.get("voice_provider"),
                 voice_id=payload.get("voice_id"),
+                voice_name=payload.get("voice_name"),
+                voice_gender=payload.get("voice_gender"),
+                voice_accent=payload.get("voice_accent"),
+                voice_language=payload.get("voice_language"),
+                company_name=payload.get("company_name"),
+                company_intro=payload.get("company_intro"),
+                company_description=payload.get("company_description"),
+                value_proposition=payload.get("value_proposition"),
                 default_context=payload.get("default_context"),
                 disqualifying_patterns=list(
                     payload.get("disqualifying_patterns") or []
                 ),
                 branches=list(payload.get("branches") or []),
+                objections=list(payload.get("objections") or []),
                 fields=fields,
             )
 
@@ -640,6 +785,25 @@ class PlaybookService:
         if branch_out.dynamic_block:
             merged["dynamic_block"] = branch_out.dynamic_block
 
+        objection_rules = parse_objections(runtime.objections)
+        objection_match = match_objection(data.user_text, objection_rules)
+        objection_out: ObjectionMatchOut | None = None
+        if objection_match:
+            instruction = objection_turn_instruction(objection_match)
+            existing = merged.get("dynamic_block")
+            merged["dynamic_block"] = (
+                f"{existing}\n\n{instruction}" if existing else instruction
+            )
+            rule = objection_match.rule
+            objection_out = ObjectionMatchOut(
+                objection_type=rule.objection_type,
+                objection_trigger=rule.objection_trigger,
+                objection_response=rule.objection_response,
+                fallback_response=rule.fallback_response,
+                score=objection_match.score,
+                strategy=objection_match.strategy,
+            )
+
         rendered = render_system_prompt(
             persona=runtime_persona,
             framework=runtime.framework,
@@ -652,4 +816,5 @@ class PlaybookService:
             qualification_after=after.snapshot().model_dump(),
             newly_set_fields=newly_clean,
             branches_fired=branch_out.fired_branch_ids,
+            objection_matched=objection_out,
         )

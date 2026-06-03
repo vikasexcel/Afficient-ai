@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   BookOpen,
+  Building2,
   ChevronDown,
   ChevronRight,
   CircleCheck,
@@ -12,9 +13,11 @@ import {
   Plus,
   RefreshCw,
   Send,
+  ShieldAlert,
   Sparkles,
   Trash2,
   Users,
+  Volume2,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -34,11 +37,20 @@ import {
   updatePlaybook,
   type PlaybookDetail,
   type PlaybookFramework,
+  type ObjectionMatchResult,
   type PlaybookSummary,
 } from "@/services/playbook";
 import { listPersonas, type Persona } from "@/services/ai";
 import PlaybookFieldEditor from "@/components/playbooks/PlaybookFieldEditor";
+import ObjectionHandling from "@/components/playbooks/ObjectionHandling";
 import PlaybookBranchEditor from "@/components/playbooks/PlaybookBranchEditor";
+import { objectionTypeLabel } from "@/lib/playbookObjections";
+import CompanyIntroduction from "@/components/playbooks/CompanyIntroduction";
+import VoiceSettings from "@/components/playbooks/VoiceSettings";
+import {
+  validateAgentName,
+  validateCompanyFields,
+} from "@/lib/playbookCompany";
 import {
   defaultFieldsForFramework,
   frameworkSwitchMessage,
@@ -81,6 +93,7 @@ type TestResultData = {
   status: string;
   newly: string[];
   fired: string[];
+  objection?: ObjectionMatchResult | null;
 };
 
 export default function Playbooks() {
@@ -151,6 +164,16 @@ export default function Playbooks() {
 
   async function handleSave() {
     if (!detail) return;
+    const agentErr = validateAgentName(detail);
+    if (agentErr) {
+      toast.error(agentErr);
+      return;
+    }
+    const companyErr = validateCompanyFields(detail);
+    if (companyErr) {
+      toast.error(companyErr);
+      return;
+    }
     setSaving(true);
     try {
       const updated = await updatePlaybook(detail.id, {
@@ -158,9 +181,20 @@ export default function Playbooks() {
         description: detail.description ?? undefined,
         framework: detail.framework,
         persona_name: detail.persona_name,
+        agent_name: detail.agent_name ?? undefined,
         system_prompt: detail.system_prompt ?? undefined,
         opening_line: detail.opening_line ?? undefined,
         default_objective: detail.default_objective ?? undefined,
+        voice_provider: detail.voice_provider ?? undefined,
+        voice_id: detail.voice_id,
+        voice_name: detail.voice_name,
+        voice_gender: detail.voice_gender,
+        voice_accent: detail.voice_accent,
+        voice_language: detail.voice_language,
+        company_name: detail.company_name ?? undefined,
+        company_intro: detail.company_intro ?? undefined,
+        company_description: detail.company_description ?? undefined,
+        value_proposition: detail.value_proposition ?? undefined,
         fields: detail.fields.map((f) => ({
           key: f.key,
           display_name: f.display_name,
@@ -171,6 +205,7 @@ export default function Playbooks() {
           position: f.position,
         })),
         branches: detail.branches ?? [],
+        objections: detail.objections ?? [],
       });
       setDetail(updated);
       toast.success("Saved");
@@ -184,6 +219,16 @@ export default function Playbooks() {
 
   async function handlePublish() {
     if (!detail) return;
+    const agentErr = validateAgentName(detail);
+    if (agentErr) {
+      toast.error(agentErr);
+      return;
+    }
+    const companyErr = validateCompanyFields(detail);
+    if (companyErr) {
+      toast.error(companyErr);
+      return;
+    }
     setSaving(true);
     try {
       const updated = await publishPlaybook(detail.id);
@@ -237,6 +282,7 @@ export default function Playbooks() {
         status: after.status ?? "in_progress",
         newly: res.newly_set_fields ?? [],
         fired: res.branches_fired ?? [],
+        objection: res.objection_matched ?? null,
       });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Test failed");
@@ -433,19 +479,32 @@ export default function Playbooks() {
                   </FieldLabel>
                 </div>
 
-                <FieldLabel label="Opening line">
-                  <Input
-                    disabled={!canEdit}
-                    value={detail.opening_line ?? ""}
-                    onChange={(e) =>
-                      setDetail({
-                        ...detail,
-                        opening_line: e.target.value || null,
-                      })
-                    }
-                    placeholder='e.g. "Hi, this is the AI agent for Acme — got a minute?"'
-                  />
-                </FieldLabel>
+              </Card>
+
+              {/* Card: Company introduction */}
+              <Card
+                icon={<Building2 size={14} className="text-violet-300" />}
+                title="Company Introduction"
+                subtitle="How the AI introduces your company on every call."
+              >
+                <CompanyIntroduction
+                  detail={detail}
+                  canEdit={canEdit}
+                  onChange={(patch) => setDetail({ ...detail, ...patch })}
+                />
+              </Card>
+
+              {/* Card: Voice settings */}
+              <Card
+                icon={<Volume2 size={14} className="text-violet-300" />}
+                title="Voice Settings"
+                subtitle="Choose the voice the agent speaks with on calls."
+              >
+                <VoiceSettings
+                  detail={detail}
+                  canEdit={canEdit}
+                  onChange={(patch) => setDetail({ ...detail, ...patch })}
+                />
               </Card>
 
               {/* Card: Qualification */}
@@ -500,6 +559,21 @@ export default function Playbooks() {
                   fields={detail.fields}
                   canEdit={canEdit}
                   onChange={(fields) => setDetail({ ...detail, fields })}
+                />
+              </Card>
+
+              {/* Card: Objection handling */}
+              <Card
+                icon={<ShieldAlert size={14} className="text-violet-300" />}
+                title="Objection Handling"
+                subtitle="How the AI responds when prospects push back."
+              >
+                <ObjectionHandling
+                  objections={detail.objections ?? []}
+                  canEdit={canEdit}
+                  onChange={(objections) =>
+                    setDetail({ ...detail, objections })
+                  }
                 />
               </Card>
 
@@ -750,6 +824,33 @@ function TestResult({
           );
         })}
       </ResultRow>
+
+      {result.objection && (
+        <div className="rounded-[8px] border border-amber-500/25 bg-amber-500/5 px-3 py-2.5 space-y-1.5">
+          <div className="text-[11px] font-medium text-amber-200/90">
+            Objection matched:{" "}
+            {objectionTypeLabel(result.objection.objection_type)}
+            <span className="text-white/40 font-normal ml-1">
+              ({result.objection.strategy}, score{" "}
+              {Math.round(result.objection.score * 100)}%)
+            </span>
+          </div>
+          <p className="text-[11px] text-white/55 leading-snug">
+            <span className="text-white/40">Configured response: </span>
+            {result.objection.objection_response}
+          </p>
+          {result.objection.fallback_response && (
+            <p className="text-[11px] text-white/45 leading-snug">
+              <span className="text-white/35">Fallback: </span>
+              {result.objection.fallback_response}
+            </p>
+          )}
+          <p className="text-[10px] text-white/35">
+            The rendered system prompt below includes turn-level guidance for
+            this objection.
+          </p>
+        </div>
+      )}
     </div>
   );
 }

@@ -162,6 +162,7 @@ export type CallListEntry = {
   qualification_score: number | null;
   total_turns: number;
   total_tokens: number;
+  duration_ms: number | null;
 };
 
 export async function listCalls(limit = 50): Promise<CallListEntry[]> {

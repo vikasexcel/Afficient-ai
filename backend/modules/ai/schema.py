@@ -178,6 +178,7 @@ class CallListEntry(BaseModel):
     qualification_score: int | None = None
     total_turns: int = 0
     total_tokens: int = 0
+    duration_ms: int | None = None
 
 
 class CallListResponse(BaseModel):

@@ -26,7 +26,14 @@ import { useMe } from "@/store/me";
 import { useLiveKit, type ParticipantInfo } from "@/store/livekit";
 import { useAI, type ChatBubble } from "@/store/ai";
 import { transcribe, type TranscriptEvent } from "@/services/stt";
-import { listPlaybooks, type PlaybookSummary } from "@/services/playbook";
+import {
+  getPlaybookForDialer,
+  type PlaybookDetail,
+  type PlaybookSummary,
+} from "@/services/playbook";
+import { previewOpeningLine } from "@/lib/playbookCompany";
+import { personaLabel } from "@/lib/playbookCopy";
+import { useActivePlaybooks } from "@/hooks/useActivePlaybooks";
 import {
   cancelCall,
   initiateCall,
@@ -63,17 +70,22 @@ export default function Calls() {
 
   const [draftRoom, setDraftRoom] = useState<string>(defaultRoomName());
   const [playbookId, setPlaybookId] = useState<string>("");
-  const [playbooks, setPlaybooks] = useState<PlaybookSummary[]>([]);
   const [mode, setMode] = useState<"browser" | "phone">("browser");
+  const {
+    playbooks,
+    reload: reloadPlaybooks,
+    loading: playbooksLoading,
+  } = useActivePlaybooks(true);
 
   useEffect(() => {
-    listPlaybooks(true)
-      .then((rows) => {
-        setPlaybooks(rows);
-        if (rows.length > 0) setPlaybookId(rows[0].id);
-      })
-      .catch(() => {});
-  }, []);
+    if (playbooks.length === 0) return;
+    setPlaybookId((current) => {
+      if (!current || !playbooks.some((p) => p.id === current)) {
+        return playbooks[0].id;
+      }
+      return current;
+    });
+  }, [playbooks]);
 
   useEffect(() => {
     return () => {
@@ -191,8 +203,10 @@ export default function Calls() {
         ) : (
           <PhoneDialerSection
             playbooks={playbooks}
+            playbooksLoading={playbooksLoading}
             defaultPlaybookId={playbookId}
             onPlaybookChange={setPlaybookId}
+            onRefreshPlaybooks={reloadPlaybooks}
           />
         )}
       </div>
@@ -654,12 +668,16 @@ function AIAssistantPanel() {
 
 function PhoneDialerSection({
   playbooks,
+  playbooksLoading,
   defaultPlaybookId,
   onPlaybookChange,
+  onRefreshPlaybooks,
 }: {
   playbooks: PlaybookSummary[];
+  playbooksLoading: boolean;
   defaultPlaybookId: string;
   onPlaybookChange: (v: string) => void;
+  onRefreshPlaybooks: () => void;
 }) {
   const [calls, setCalls] = useState<TelephonyCall[]>([]);
   const [loading, setLoading] = useState(false);
@@ -702,9 +720,14 @@ function PhoneDialerSection({
     <div className="grid grid-cols-1 lg:grid-cols-[380px_minmax(0,1fr)] xl:grid-cols-[420px_minmax(0,1fr)] gap-5 items-start">
       <DialerForm
         playbooks={playbooks}
+        playbooksLoading={playbooksLoading}
         defaultPlaybookId={defaultPlaybookId}
         onPlaybookChange={onPlaybookChange}
-        onPlaced={() => setRefreshTick((t) => t + 1)}
+        onRefreshPlaybooks={onRefreshPlaybooks}
+        onPlaced={() => {
+          setRefreshTick((t) => t + 1);
+          onRefreshPlaybooks();
+        }}
       />
       <RecentPhoneCalls
         calls={calls}
@@ -717,26 +740,68 @@ function PhoneDialerSection({
 
 function DialerForm({
   playbooks,
+  playbooksLoading,
   defaultPlaybookId,
   onPlaybookChange,
+  onRefreshPlaybooks,
   onPlaced,
 }: {
   playbooks: PlaybookSummary[];
+  playbooksLoading: boolean;
   defaultPlaybookId: string;
   onPlaybookChange: (v: string) => void;
+  onRefreshPlaybooks: () => void;
   onPlaced: () => void;
 }) {
   const [toNumber, setToNumber] = useState("");
   const [leadName, setLeadName] = useState("");
-  const [opening, setOpening] = useState(
-    "Hi, this is Alex from Aifficient — got 30 seconds?"
-  );
   const [playbookId, setPlaybookId] = useState(defaultPlaybookId);
+  const [playbookPreview, setPlaybookPreview] = useState<PlaybookDetail | null>(
+    null
+  );
+  const [playbookLoading, setPlaybookLoading] = useState(false);
+  const [playbookLoadError, setPlaybookLoadError] = useState<string | null>(
+    null
+  );
   const [dialing, setDialing] = useState(false);
+
+  const dialOpeningPreview = playbookPreview
+    ? previewOpeningLine(playbookPreview)
+    : null;
 
   useEffect(() => {
     setPlaybookId(defaultPlaybookId);
   }, [defaultPlaybookId]);
+
+  useEffect(() => {
+    if (!playbookId) {
+      setPlaybookPreview(null);
+      setPlaybookLoadError(null);
+      return;
+    }
+    let alive = true;
+    setPlaybookLoading(true);
+    setPlaybookLoadError(null);
+    getPlaybookForDialer(playbookId)
+      .then((pb) => {
+        if (!alive) return;
+        setPlaybookPreview(pb);
+        setPlaybookLoadError(null);
+      })
+      .catch((err) => {
+        if (!alive) return;
+        setPlaybookPreview(null);
+        const detail =
+          (err as { response?: { data?: { detail?: string } } })?.response?.data
+            ?.detail ||
+          (err instanceof Error ? err.message : "Could not load playbook");
+        setPlaybookLoadError(detail);
+      })
+      .finally(() => alive && setPlaybookLoading(false));
+    return () => {
+      alive = false;
+    };
+  }, [playbookId]);
 
   const validNumber = /^\+[1-9]\d{6,14}$/.test(toNumber.trim());
 
@@ -745,13 +810,28 @@ function DialerForm({
       toast.error("Enter a phone number in E.164 format (e.g. +14155551234)");
       return;
     }
+    if (!playbookId) {
+      toast.error("Select a published playbook before placing a call.");
+      return;
+    }
+    if (playbookLoadError) {
+      toast.error(playbookLoadError);
+      return;
+    }
+    if (playbookLoading || !playbookPreview) {
+      toast.error("Wait for the playbook to finish loading, or pick another.");
+      return;
+    }
+    if (playbookPreview.status !== "active") {
+      toast.error("Only published (active) playbooks can be used on calls.");
+      return;
+    }
     setDialing(true);
     try {
       const call = await initiateCall({
         to_number: toNumber.trim(),
         lead_name: leadName.trim() || undefined,
-        opening_line: opening.trim() || undefined,
-        playbook_id: playbookId || undefined,
+        playbook_id: playbookId,
       });
       toast.success(
         `Dialing ${call.to_number} — sid ${call.call_sid ?? "(pending)"}`
@@ -810,41 +890,117 @@ function DialerForm({
         className="w-full bg-white/[0.04] border border-white/[0.09] focus:border-violet-500/50 focus:ring-2 focus:ring-violet-500/10 rounded-[8px] px-3 py-2.5 text-[13px] text-white placeholder-white/20 outline-none transition-all"
       />
 
-      <label className="block text-[11px] font-medium text-white/40 tracking-wide mt-4 mb-1.5">
-        Opening line
-      </label>
-      <textarea
-        value={opening}
-        onChange={(e) => setOpening(e.target.value)}
-        rows={2}
-        className="w-full bg-white/[0.04] border border-white/[0.09] focus:border-violet-500/50 focus:ring-2 focus:ring-violet-500/10 rounded-[8px] px-3 py-2.5 text-[13px] text-white placeholder-white/20 outline-none transition-all resize-none"
-      />
-
-      <label className="block text-[11px] font-medium text-white/40 tracking-wide mt-4 mb-1.5">
-        Playbook
-      </label>
+      <div className="flex items-center justify-between mt-4 mb-1.5">
+        <label className="text-[11px] font-medium text-white/40 tracking-wide">
+          Playbook (published)
+        </label>
+        <button
+          type="button"
+          onClick={onRefreshPlaybooks}
+          disabled={playbooksLoading}
+          className="text-[10px] text-violet-300/80 hover:text-violet-200 flex items-center gap-1"
+        >
+          <RefreshCw
+            size={11}
+            className={playbooksLoading ? "animate-spin" : ""}
+          />
+          Refresh list
+        </button>
+      </div>
       <select
         value={playbookId}
         onChange={(e) => {
           setPlaybookId(e.target.value);
           onPlaybookChange(e.target.value);
         }}
-        className="w-full bg-white/[0.04] border border-white/[0.09] focus:border-violet-500/50 rounded-[8px] px-3 py-2.5 text-[12px] text-white outline-none"
+        disabled={playbooks.length === 0}
+        className="w-full bg-white/[0.04] border border-white/[0.09] focus:border-violet-500/50 rounded-[8px] px-3 py-2.5 text-[13px] text-white outline-none disabled:opacity-50"
       >
         {playbooks.length === 0 ? (
-          <option value="">No active playbooks</option>
+          <option value="">
+            {playbooksLoading
+              ? "Loading playbooks…"
+              : "No published playbooks — publish one in Playbooks"}
+          </option>
         ) : (
           playbooks.map((p) => (
             <option key={p.id} value={p.id}>
-              {p.name} ({p.framework})
+              {p.name}
             </option>
           ))
         )}
       </select>
 
+      {playbookLoading && (
+        <div className="mt-2 flex items-center gap-2 text-[11px] text-white/45">
+          <Loader2 size={12} className="animate-spin" />
+          Loading playbook configuration…
+        </div>
+      )}
+
+      {playbookLoadError && (
+        <div className="mt-2 text-[11px] text-rose-300/90 leading-snug">
+          {playbookLoadError}
+        </div>
+      )}
+
+      {playbookPreview && !playbookLoadError && (
+        <div className="mt-3 rounded-[8px] border border-violet-500/20 bg-violet-500/5 px-3 py-2.5 space-y-1">
+          <div className="text-[13px] font-semibold text-white">
+            {playbookPreview.name}
+          </div>
+          <div className="text-[10px] text-white/40 font-mono truncate">
+            ID {playbookPreview.id}
+          </div>
+          <div className="text-[11px] font-medium text-violet-200/90 pt-1">
+            This call will follow this playbook
+          </div>
+          <ul className="text-[11px] text-white/50 space-y-0.5 leading-snug">
+            <li>
+              Style: {personaLabel(playbookPreview.persona_name)}
+              {playbookPreview.voice_name
+                ? ` · Voice: ${playbookPreview.voice_name}`
+                : ""}
+            </li>
+            <li>
+              Framework: {playbookPreview.framework} ·{" "}
+              {playbookPreview.fields.length} qualification field
+              {playbookPreview.fields.length === 1 ? "" : "s"}
+            </li>
+            {playbookPreview.default_objective && (
+              <li>Goal: {playbookPreview.default_objective}</li>
+            )}
+            {playbookPreview.agent_name && (
+              <li>Agent name: {playbookPreview.agent_name}</li>
+            )}
+            {playbookPreview.company_name && (
+              <li>Company: {playbookPreview.company_name}</li>
+            )}
+            {dialOpeningPreview && (
+              <li className="truncate" title={dialOpeningPreview}>
+                Opening: {dialOpeningPreview}
+              </li>
+            )}
+            {(playbookPreview.branches?.length ?? 0) > 0 && (
+              <li>
+                {playbookPreview.branches!.length} smart branch rule
+                {playbookPreview.branches!.length === 1 ? "" : "s"}
+              </li>
+            )}
+          </ul>
+        </div>
+      )}
+
       <Button
         onClick={handleDial}
-        disabled={dialing || !validNumber}
+        disabled={
+          dialing ||
+          !validNumber ||
+          !playbookId ||
+          playbookLoading ||
+          !!playbookLoadError ||
+          !playbookPreview
+        }
         className="mt-5 w-full bg-emerald-600 hover:bg-emerald-500 text-white"
       >
         {dialing ? (
@@ -861,10 +1017,9 @@ function DialerForm({
       </Button>
 
       <p className="text-[11px] text-white/30 mt-4 leading-relaxed">
-        The backend creates a Twilio call, mints a LiveKit room, and drops the
-        AI agent in. Twilio webhook callbacks drive the status column. Real
-        audio bridging requires <code className="text-white/55">LIVEKIT_SIP_URI</code>
-         + a SIP trunk in LiveKit Cloud.
+        Voice, opening line, qualification, and branching all come from the
+        selected playbook. Only the destination number and optional lead name
+        are set here.
       </p>
     </div>
   );

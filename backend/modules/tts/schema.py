@@ -54,3 +54,46 @@ class Voice(BaseModel):
 
 class VoiceListResponse(BaseModel):
     voices: list[Voice]
+
+
+# ---------------------------------------------------------------------------
+# Voice registry + preview
+# ---------------------------------------------------------------------------
+
+
+class RegistryVoiceOut(BaseModel):
+    """A curated, human-friendly voice for the playbook UI dropdowns."""
+
+    provider: str
+    voice_id: str
+    name: str
+    gender: str
+    accent: str
+    language: str = "en"
+    description: str | None = None
+
+
+class VoiceProviderOut(BaseModel):
+    id: str
+    label: str
+    enabled: bool
+
+
+class VoiceRegistryResponse(BaseModel):
+    providers: list[VoiceProviderOut]
+    genders: list[str]
+    accents: list[str]
+    voices: list[RegistryVoiceOut]
+
+
+class VoicePreviewRequest(BaseModel):
+    """Render a short sample clip for the exact voice used on calls."""
+
+    voice_id: str | None = Field(default=None, max_length=64)
+    provider: str | None = Field(default=None, max_length=32)
+    model_id: str | None = Field(default=None, max_length=64)
+    text: str = Field(
+        default="Hi, this is your AI agent. Thank you for taking my call.",
+        min_length=1,
+        max_length=600,
+    )

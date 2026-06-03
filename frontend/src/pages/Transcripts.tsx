@@ -4,6 +4,7 @@ import {
   Copy,
   Download,
   FileText,
+  Loader2,
   Phone,
   RefreshCw,
   Search,
@@ -24,6 +25,11 @@ import {
   type QualificationSnapshot,
   type TranscriptEntry,
 } from "@/services/ai";
+import {
+  initiateCall,
+  listCalls as listTelephonyCalls,
+  type TelephonyCall,
+} from "@/services/telephony";
 
 type Sentiment = "positive" | "neutral" | "negative";
 
@@ -32,6 +38,15 @@ function sentimentFor(c: CallListEntry): Sentiment {
   if (c.qualification_status === "qualified" || score >= 60) return "positive";
   if (c.qualification_status === "disqualified") return "negative";
   return "neutral";
+}
+
+function formatDuration(ms: number | null): string | null {
+  if (ms == null || ms <= 0) return null;
+  const totalSec = Math.round(ms / 1000);
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  if (min === 0) return `${sec}s`;
+  return `${min}m ${sec.toString().padStart(2, "0")}s`;
 }
 
 function formatRelative(iso: string): string {
@@ -70,6 +85,12 @@ export default function Transcripts() {
   const [loadingList, setLoadingList] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Telephony records keyed by LiveKit room name (== AI call_id). Used to
+  // recover the original phone number + lead for the "Call Again" action,
+  // since the AI call list doesn't carry the destination number.
+  const [phoneByRoom, setPhoneByRoom] = useState<Record<string, TelephonyCall>>(
+    {}
+  );
 
   async function loadCalls() {
     setLoadingList(true);
@@ -90,8 +111,28 @@ export default function Transcripts() {
     }
   }
 
+  async function loadPhoneCalls() {
+    try {
+      const rows = await listTelephonyCalls({ limit: 200 });
+      const map: Record<string, TelephonyCall> = {};
+      for (const r of rows) {
+        // Keep the most recent record per room (rows are newest-first).
+        if (r.room_name && !map[r.room_name]) map[r.room_name] = r;
+      }
+      setPhoneByRoom(map);
+    } catch (err) {
+      // Non-fatal: the page still renders; Call Again stays disabled.
+      console.error("Failed to load telephony calls for recall", err);
+    }
+  }
+
+  async function refreshAll() {
+    await Promise.all([loadCalls(), loadPhoneCalls()]);
+  }
+
   useEffect(() => {
     loadCalls();
+    loadPhoneCalls();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -110,8 +151,8 @@ export default function Transcripts() {
 
   return (
     <AppLayout>
-      <div className="space-y-5 max-w-6xl">
-        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+      <div className="flex flex-col gap-5 w-full min-w-0 lg:h-full lg:overflow-hidden">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 shrink-0">
           <div className="min-w-0">
             <h1 className="text-xl sm:text-2xl font-medium text-white">
               Transcripts
@@ -135,9 +176,9 @@ export default function Transcripts() {
           </Button>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[360px_minmax(0,1fr)] gap-4 lg:min-h-[640px]">
-          <div className="rounded-[12px] border border-white/[0.06] bg-white/[0.02] overflow-hidden flex flex-col max-h-[420px] lg:max-h-none">
-            <div className="p-3 border-b border-white/[0.05]">
+        <div className="flex flex-col lg:flex-row gap-4 lg:flex-1 lg:min-h-0 lg:overflow-hidden">
+          <div className="rounded-[12px] border border-white/[0.06] bg-white/[0.02] overflow-hidden flex flex-col w-full lg:w-[320px] xl:w-[360px] lg:shrink-0 max-h-[420px] lg:max-h-none lg:min-h-0">
+            <div className="p-3 border-b border-white/[0.05] shrink-0">
               <div className="relative">
                 <Search
                   size={14}
@@ -152,7 +193,7 @@ export default function Transcripts() {
               </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto">
+            <div className="flex-1 overflow-y-auto min-h-0">
               {listError ? (
                 <div className="py-8 px-4 text-[12px] text-red-300">
                   {listError}
@@ -209,6 +250,9 @@ export default function Transcripts() {
                           <Clock size={11} />
                           {formatRelative(c.updated_at)}
                         </span>
+                        {formatDuration(c.duration_ms) && (
+                          <span>{formatDuration(c.duration_ms)}</span>
+                        )}
                         {c.qualification_score != null && (
                           <span className="ml-auto text-violet-300 font-medium">
                             {c.qualification_score}/100
@@ -225,10 +269,12 @@ export default function Transcripts() {
           {selected ? (
             <TranscriptDetail
               call={selected}
+              phoneCall={phoneByRoom[selected.call_id] ?? null}
               onChanged={loadCalls}
+              onRecall={refreshAll}
             />
           ) : (
-            <div className="rounded-[12px] border border-white/[0.06] bg-white/[0.02] flex items-center justify-center text-[13px] text-white/45 min-h-[480px]">
+            <div className="rounded-[12px] border border-white/[0.06] bg-white/[0.02] flex items-center justify-center text-[13px] text-white/45 w-full min-w-0 lg:flex-1 min-h-[480px] lg:min-h-0 lg:h-full">
               {calls.length === 0 && !loadingList
                 ? "Run a conversation from the Calls page to populate this view."
                 : "Select a transcript to view details."}
@@ -246,16 +292,59 @@ export default function Transcripts() {
 
 function TranscriptDetail({
   call,
+  phoneCall,
   onChanged,
+  onRecall,
 }: {
   call: CallListEntry;
+  phoneCall: TelephonyCall | null;
   onChanged: () => Promise<void> | void;
+  onRecall: () => Promise<void> | void;
 }) {
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [finalizing, setFinalizing] = useState(false);
   const [summary, setSummary] = useState<CallSummary | null>(null);
+  const [calling, setCalling] = useState(false);
+
+  const recallNumber = phoneCall?.to_number ?? null;
+
+  async function handleCallAgain() {
+    if (!recallNumber) {
+      toast.error(
+        "No phone number on record for this transcript — can't redial."
+      );
+      return;
+    }
+    setCalling(true);
+    try {
+      const newCall = await initiateCall({
+        to_number: recallNumber,
+        lead_name: phoneCall?.lead_name ?? undefined,
+        lead_id: phoneCall?.lead_id ?? undefined,
+        lead_phone: phoneCall?.lead_phone ?? undefined,
+        campaign_id: phoneCall?.campaign_id ?? undefined,
+        // Playbook lives on the AI call; persona is the fallback.
+        playbook_id: call.playbook_id ?? undefined,
+        persona: call.playbook_id ? undefined : call.persona ?? undefined,
+      });
+      toast.success(
+        `Calling ${newCall.to_number}${
+          newCall.lead_name ? ` (${newCall.lead_name})` : ""
+        } — new call started`
+      );
+      await onRecall();
+    } catch (err) {
+      const detail =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data
+          ?.detail || (err as Error)?.message || "Failed to start call";
+      console.error("Call Again failed", err);
+      toast.error(detail);
+    } finally {
+      setCalling(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -321,8 +410,8 @@ function TranscriptDetail({
   const sentStyle = SENTIMENT_STYLES[sent];
 
   return (
-    <div className="rounded-[12px] border border-white/[0.06] bg-white/[0.02] flex flex-col overflow-hidden">
-      <div className="p-4 sm:p-5 border-b border-white/[0.05]">
+    <div className="rounded-[12px] border border-white/[0.06] bg-white/[0.02] flex flex-col overflow-hidden w-full min-w-0 lg:flex-1 lg:h-full lg:min-h-0">
+      <div className="p-4 sm:p-5 border-b border-white/[0.05] shrink-0 sticky top-0 z-10">
         <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
@@ -371,10 +460,25 @@ function TranscriptDetail({
             <Button
               size="sm"
               className="bg-violet-600 hover:bg-violet-500 text-white"
-              onClick={() => toast.message("Recall flow coming soon")}
+              onClick={handleCallAgain}
+              disabled={calling || !recallNumber}
+              title={
+                recallNumber
+                  ? `Redial ${recallNumber}`
+                  : "No phone number on record for this transcript"
+              }
             >
-              <Phone size={13} />
-              Call again
+              {calling ? (
+                <>
+                  <Loader2 size={13} className="animate-spin" />
+                  Calling…
+                </>
+              ) : (
+                <>
+                  <Phone size={13} />
+                  Call again
+                </>
+              )}
             </Button>
           </div>
         </div>
@@ -384,6 +488,12 @@ function TranscriptDetail({
             <Clock size={12} />
             {formatRelative(call.updated_at)}
           </span>
+          {formatDuration(call.duration_ms) && (
+            <span className="inline-flex items-center gap-1">
+              <Clock size={12} />
+              {formatDuration(call.duration_ms)}
+            </span>
+          )}
           <span>{call.total_turns} turns</span>
           <span>{call.total_tokens} tokens</span>
           {call.qualification_score != null && (
@@ -394,6 +504,7 @@ function TranscriptDetail({
         </div>
       </div>
 
+      <div className="flex-1 overflow-y-auto min-h-0">
       {(displaySummary || displayQualification) && (
         <div className="p-5 border-b border-white/[0.05] bg-violet-500/[0.03]">
           <div className="flex items-center justify-between">
@@ -439,7 +550,7 @@ function TranscriptDetail({
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto p-5">
+      <div className="p-5">
         <div className="flex items-center gap-2 mb-4 text-[11px] font-medium text-white/45 uppercase tracking-wider">
           <FileText size={11} />
           Transcript {entries.length > 0 && `· ${entries.length} entries`}
@@ -464,6 +575,7 @@ function TranscriptDetail({
             <TurnRow key={i} turn={turn} />
           ))}
         </div>
+      </div>
       </div>
     </div>
   );

@@ -267,6 +267,10 @@ class STTStreamer:
         self._agent_identity = agent_identity or settings.DEEPGRAM_STT_AGENT_IDENTITY
         self._agent_name = agent_name or settings.DEEPGRAM_STT_AGENT_NAME
 
+    @property
+    def agent_identity(self) -> str:
+        return self._agent_identity
+
     @asynccontextmanager
     async def open_session(
         self,
@@ -279,6 +283,7 @@ class STTStreamer:
         interim_results: bool | None = None,
         agent_identity: str | None = None,
         agent_name: str | None = None,
+        ignore_identities: set[str] | None = None,
     ) -> AsyncIterator[STTSession]:
         """Yield a live :class:`STTSession` for ``room``.
 
@@ -308,6 +313,7 @@ class STTStreamer:
             url=token.url,
             sample_rate=rate,
             num_channels=channels,
+            ignore_identities=ignore_identities,
         )
         try:
             await transport.connect(auto_publish=False)

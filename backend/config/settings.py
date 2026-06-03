@@ -49,6 +49,12 @@ class Settings(BaseSettings):
     ELEVENLABS_SAMPLE_RATE: int = 24000
     ELEVENLABS_AGENT_IDENTITY: str = "ai-agent"
     ELEVENLABS_AGENT_NAME: str = "AI Agent"
+    # Output format used for in-browser voice previews (an mp3 profile the
+    # ElevenLabs SDK can emit and an <audio> element can play directly).
+    ELEVENLABS_PREVIEW_FORMAT: str = "mp3_44100_128"
+    # Optional JSON array overriding/extending the curated voice registry.
+    # See modules.tts.voice_registry. Empty string = use built-in defaults.
+    TTS_VOICE_REGISTRY_JSON: str = ""
 
     # Deepgram STT
     DEEPGRAM_API_KEY: str = ""
@@ -88,6 +94,11 @@ class Settings(BaseSettings):
     # Minimum characters in a PARTIAL to count as user speech (filters
     # noise-driven false positives). Effective only when BARGE_IN_ON_PARTIAL.
     BARGE_IN_PARTIAL_MIN_CHARS: int = 2
+    # Barge-in on PSTN/phone-dialer calls. Disabled by default because PSTN
+    # echo / line noise can trigger false SPEECH_STARTED / PARTIAL events that
+    # cut the agent off mid-utterance. Browser test rooms are unaffected by
+    # this flag (they always allow barge-in).
+    PHONE_CALL_BARGE_IN_ENABLED: bool = False
     # Throttle: don't fire two barge-ins within this window (ms).
     BARGE_IN_COOLDOWN_MS: int = 250
     # Number of interruption events to keep per call in Redis (FIFO).
@@ -142,6 +153,13 @@ class Settings(BaseSettings):
     # SIP gateway, bridging the PSTN leg into the AI agent's room.
     # Example: "sip.livekit.cloud" or "<region>.sip.livekit.cloud".
     LIVEKIT_SIP_URI: str = ""
+    # LiveKit-originated outbound calling (preferred path). When set, the
+    # backend dials the lead via LiveKit ``CreateSIPParticipant`` into the
+    # agent's room instead of Twilio TwiML <Dial><Sip>. Provisioned by
+    # ``scripts/setup_sip_trunk.py``.
+    LIVEKIT_SIP_OUTBOUND_TRUNK_ID: str = ""
+    # Ring timeout (seconds) for LiveKit-originated SIP calls.
+    LIVEKIT_SIP_RING_TIMEOUT_SECONDS: float = 30.0
     # When False (dev), webhook signature validation is skipped.
     TWILIO_VALIDATE_SIGNATURE: bool = True
     # Default per-call timeouts.

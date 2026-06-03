@@ -119,6 +119,53 @@ def test_preview_endpoint_returns_system_prompt(client, auth_headers):
     assert len(body["rendered_system_prompt"]) > 50
 
 
+def test_objections_save_and_test_match_send_information(client, auth_headers):
+  """Objection rules persist and the test endpoint matches prospect phrasing."""
+  objections = [
+      {
+          "objection_type": "send_information",
+          "objection_trigger": "send me information",
+          "objection_response": (
+              "Absolutely, I can do that. But honestly, it might make more "
+              "sense to spend 10 minutes together first so I can show you "
+              "how it works. Would tomorrow or Thursday be easier?"
+          ),
+          "fallback_response": (
+              "Would it be unreasonable to spend 10 minutes seeing how it works?"
+          ),
+      }
+  ]
+  payload = _payload()
+  payload["objections"] = objections
+
+  create = client.post(
+      "/api/v1/playbooks", json=payload, headers=auth_headers
+  )
+  assert create.status_code == 201, create.text
+  pb_id = create.json()["id"]
+
+  fetched = client.get(f"/api/v1/playbooks/{pb_id}", headers=auth_headers)
+  assert fetched.status_code == 200
+  saved = fetched.json().get("objections") or []
+  assert len(saved) == 1
+  assert saved[0]["objection_type"] == "send_information"
+
+  test = client.post(
+      f"/api/v1/playbooks/{pb_id}/test",
+      json={"user_text": "Can you just send me some information?"},
+      headers=auth_headers,
+  )
+  assert test.status_code == 200, test.text
+  body = test.json()
+  assert body.get("objection_matched") is not None
+  assert body["objection_matched"]["objection_type"] == "send_information"
+  assert "10 minutes" in body["objection_matched"]["objection_response"]
+  assert "Objection handling" in body["rendered_system_prompt"]
+  assert "send_information" in body["rendered_system_prompt"].lower() or (
+      "Send Information" in body["rendered_system_prompt"]
+  )
+
+
 def test_duplicate_endpoint_creates_new_draft(client, auth_headers):
     r = client.post("/api/v1/playbooks", json=_payload(), headers=auth_headers)
     pb_id = r.json()["id"]

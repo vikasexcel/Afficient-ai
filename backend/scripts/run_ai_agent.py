@@ -91,6 +91,7 @@ async def amain(args: argparse.Namespace) -> int:
     }
     opening = os.environ.get("AI_AGENT_OPENING", DEFAULT_OPENING)
     idle = float(os.environ.get("AI_AGENT_IDLE_SECONDS", "90"))
+    wait_for_human = float(os.environ.get("AI_AGENT_WAIT_FOR_HUMAN_SECONDS", "30"))
 
     print(f"Joining room: {args.room}")
     print(f"  persona  : {persona}")
@@ -110,6 +111,7 @@ async def amain(args: argparse.Namespace) -> int:
         extra_context=extra_context,
         opening_line=opening,
         idle_timeout_seconds=idle,
+        wait_for_human_seconds=wait_for_human,
     )
 
     try:

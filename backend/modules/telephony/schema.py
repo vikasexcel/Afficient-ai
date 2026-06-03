@@ -42,7 +42,9 @@ class InitiateCallRequest(BaseModel):
     lead_phone: str | None = None
     campaign_id: uuid.UUID | None = None
 
-    # Agent / conversation knobs forwarded to the orchestrator.
+    # When ``playbook_id`` is set, the playbook is the source of truth for
+    # persona, framework, opening line, voice, qualification fields, branches,
+    # and ``default_context``. The fields below are ignored in that case.
     playbook_id: uuid.UUID | None = None
     persona: str | None = Field(default=None, max_length=64)
     qualification_framework: str | None = Field(default=None, max_length=16)

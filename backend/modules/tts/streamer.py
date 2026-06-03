@@ -99,6 +99,10 @@ class TTSStreamer:
         self._agent_identity = agent_identity or settings.ELEVENLABS_AGENT_IDENTITY
         self._agent_name = agent_name or settings.ELEVENLABS_AGENT_NAME
 
+    @property
+    def agent_identity(self) -> str:
+        return self._agent_identity
+
     # ------------------------------------------------------------------
     # One-shot API
     # ------------------------------------------------------------------
@@ -318,6 +322,16 @@ class TTSStreamer:
                 raise
 
             stream_end_ms = int((time.monotonic() - pump_start) * 1000)
+            audio_duration_ms = int(
+                total / max(self._tts.sample_rate * 2, 1) * 1000
+            )
+            log.info(
+                "tts.TTS_AUDIO_DURATION",
+                chars=len(text),
+                bytes_streamed=total,
+                audio_duration_ms=audio_duration_ms,
+                stream_end_ms=stream_end_ms,
+            )
             return PumpStats(
                 bytes_streamed=total,
                 ttfb_ms=max(ttfb_ms, 0),
@@ -387,6 +401,23 @@ class TTSSession:
         self._current_task: asyncio.Task[PumpStats] | None = None
         self._interrupted = False
         self._interrupt_lock = asyncio.Lock()
+
+    async def wait_for_human(
+        self,
+        *,
+        exclude: set[str] | None = None,
+        timeout: float = 30.0,
+    ) -> str | None:
+        """Block until the human caller joins the room (or ``timeout``).
+
+        Used by the orchestrator to avoid speaking the opening line into
+        an empty room before the PSTN leg has been answered and bridged
+        into LiveKit. Returns the human participant identity or ``None``.
+        """
+
+        return await self._transport.wait_for_remote(
+            exclude=exclude, timeout=timeout
+        )
 
     @property
     def is_speaking(self) -> bool:

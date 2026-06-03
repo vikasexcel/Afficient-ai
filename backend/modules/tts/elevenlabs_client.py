@@ -23,6 +23,28 @@ log = get_logger("tts.elevenlabs")
 _SUPPORTED_SAMPLE_RATES = {8000, 16000, 22050, 24000, 44100, 48000}
 
 
+def _friendly_provider_error(exc: Exception) -> str:
+    """Translate a raw ElevenLabs SDK error into a user-facing message."""
+
+    msg = str(exc).lower()
+    if "voice" in msg and ("not found" in msg or "does not exist" in msg):
+        return (
+            "That voice could not be found on ElevenLabs. "
+            "Check the Voice ID or pick a different voice."
+        )
+    if "unauthor" in msg or "api key" in msg or "401" in msg:
+        return (
+            "ElevenLabs rejected the request (authentication). "
+            "Verify the ElevenLabs API key."
+        )
+    if "quota" in msg or "limit" in msg or "429" in msg:
+        return (
+            "ElevenLabs quota/rate limit reached. "
+            "Please try again in a moment."
+        )
+    return f"ElevenLabs could not generate audio: {exc}"
+
+
 class ElevenLabsTTS:
     """Thin async wrapper around the ElevenLabs Python SDK."""
 
@@ -96,6 +118,12 @@ class ElevenLabsTTS:
             chars=len(text),
             sample_rate=self._sample_rate,
         )
+        log.info(
+            "tts.TTS_TEXT_LENGTH",
+            voice_id=voice,
+            chars=len(text),
+            words=len(text.split()),
+        )
 
         try:
             stream = self._client.text_to_speech.convert(
@@ -113,6 +141,67 @@ class ElevenLabsTTS:
             raise TTSProviderError(f"ElevenLabs stream failed: {exc}") from exc
 
         log.info("tts.stream.end", voice_id=voice)
+
+    # ------------------------------------------------------------------
+    # One-shot synthesis (browser preview)
+    # ------------------------------------------------------------------
+
+    async def synthesize(
+        self,
+        text: str,
+        *,
+        voice_id: str | None = None,
+        model_id: str | None = None,
+        output_format: str | None = None,
+    ) -> bytes:
+        """Render ``text`` to a single audio buffer (mp3 by default).
+
+        Used for the in-browser "Preview Voice" feature where we want a
+        complete, directly-playable clip rather than a PCM stream into a
+        LiveKit room. Raises :class:`TTSProviderError` with a user-friendly
+        message when ElevenLabs rejects the request (e.g. an invalid voice
+        id), and :class:`TTSConfigError` when no voice is resolvable.
+        """
+
+        voice = voice_id or self._default_voice_id
+        if not voice:
+            raise TTSConfigError(
+                "No voice selected and ELEVENLABS_VOICE_ID is not set"
+            )
+        model = model_id or self._default_model_id
+        fmt = output_format or "mp3_44100_128"
+
+        log.info(
+            "tts.synthesize.start",
+            voice_id=voice,
+            model_id=model,
+            chars=len(text),
+            output_format=fmt,
+        )
+
+        buf = bytearray()
+        try:
+            stream = self._client.text_to_speech.convert(
+                voice_id=voice,
+                text=text,
+                model_id=model,
+                output_format=fmt,
+            )
+            async for chunk in stream:
+                if chunk:
+                    buf.extend(chunk)
+        except Exception as exc:
+            log.exception("tts.synthesize.failed", voice_id=voice)
+            raise TTSProviderError(_friendly_provider_error(exc)) from exc
+
+        if not buf:
+            raise TTSProviderError(
+                "ElevenLabs returned no audio for this voice. "
+                "Double-check the Voice ID and try again."
+            )
+
+        log.info("tts.synthesize.end", voice_id=voice, bytes=len(buf))
+        return bytes(buf)
 
     # ------------------------------------------------------------------
     # Voices

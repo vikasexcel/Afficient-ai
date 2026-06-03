@@ -74,11 +74,20 @@ def create_playbook(
 @router.get("/{playbook_id}", response_model=PlaybookDetail)
 def get_playbook(
     playbook_id: uuid.UUID,
+    for_dialer: bool = False,
     db: Session = Depends(get_db),
     tenant=Depends(get_current_tenant),
 ):
+    """Return playbook detail.
+
+    When ``for_dialer=true`` (phone dialer), only active playbooks are
+    accepted and ``PLAYBOOK_SELECTED`` is logged.
+    """
     try:
-        return PlaybookService.get(db, _org_id(tenant), playbook_id)
+        org = _org_id(tenant)
+        if for_dialer:
+            return PlaybookService.get_for_dialer(db, org, playbook_id)
+        return PlaybookService.get(db, org, playbook_id)
     except PlaybookError as exc:
         raise _to_http(exc) from exc
 

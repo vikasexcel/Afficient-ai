@@ -130,15 +130,42 @@ class AIService:
 
         playbook_runtime: PlaybookRuntimeConfig | None = None
         if playbook_id and organization_id:
-            playbook_runtime = await asyncio.to_thread(
-                self._load_playbook,
-                organization_id=organization_id,
-                playbook_id=playbook_id,
+            log.info(
+                "ai.PLAYBOOK_SELECTED",
+                call_id=call_id,
+                playbook_id=str(playbook_id),
             )
+            from modules.playbook.exceptions import PlaybookError
 
+            try:
+                playbook_runtime = await asyncio.to_thread(
+                    self._load_playbook,
+                    organization_id=organization_id,
+                    playbook_id=playbook_id,
+                )
+            except PlaybookError as exc:
+                raise AIError(exc.message, status_code=exc.status_code) from exc
+
+        agent_name: str | None = None
         if playbook_runtime:
+            from modules.playbook.call_apply import playbook_application_summary
+            from modules.playbook.company import resolve_agent_name
+
             persona = playbook_runtime.persona_name
             framework = playbook_runtime.framework
+            agent_name = resolve_agent_name(playbook_runtime)
+            summary = playbook_application_summary(playbook_runtime)
+            log.info(
+                "ai.PLAYBOOK_LOADED",
+                call_id=call_id,
+                **summary,
+            )
+            log.info(
+                "ai.AGENT_NAME_LOADED",
+                call_id=call_id,
+                playbook_id=str(playbook_runtime.playbook_id),
+                agent_name=agent_name,
+            )
 
         fw = self._normalise_framework(framework)
         meta = {
@@ -151,6 +178,32 @@ class AIService:
         }
         if playbook_runtime:
             meta.update(playbook_runtime.to_meta())
+            from modules.playbook.call_apply import playbook_application_summary
+
+            log.info(
+                "ai.PLAYBOOK_APPLIED",
+                call_id=call_id,
+                **summary,
+            )
+            log.info(
+                "ai.AGENT_NAME_APPLIED",
+                call_id=call_id,
+                playbook_id=str(playbook_runtime.playbook_id),
+                agent_name=agent_name,
+            )
+            resolved_voice = (
+                playbook_runtime.voice_id or settings.ELEVENLABS_VOICE_ID or None
+            )
+            log.info(
+                "ai.VOICE_APPLIED",
+                call_id=call_id,
+                playbook_id=str(playbook_runtime.playbook_id),
+                playbook_name=summary["playbook_name"],
+                voice_id=resolved_voice,
+                voice_name=playbook_runtime.voice_name,
+                provider=playbook_runtime.voice_provider or "elevenlabs",
+                source="playbook" if playbook_runtime.voice_id else "env_default",
+            )
 
         await self._memory.set_meta(call_id, meta)
 
@@ -177,6 +230,14 @@ class AIService:
             persona=meta["persona"],
             framework=fw.value,
             playbook_id=str(playbook_runtime.playbook_id) if playbook_runtime else None,
+        )
+        log.info(
+            "ai.CALL_STARTED_WITH_AGENT",
+            call_id=call_id,
+            playbook_id=(
+                str(playbook_runtime.playbook_id) if playbook_runtime else None
+            ),
+            agent_name=agent_name or "AI Assistant",
         )
         return snapshot
 
@@ -254,6 +315,51 @@ class AIService:
             effective_persona=effective_persona,
             merged_ctx=merged_ctx,
         )
+
+        from modules.playbook.objections import (
+            match_objection,
+            objection_turn_instruction,
+            parse_objections,
+        )
+
+        objection_rules = (
+            parse_objections(playbook.objections) if playbook else []
+        )
+        obj_match = (
+            match_objection(user_input, objection_rules)
+            if objection_rules
+            else None
+        )
+        if obj_match:
+            snippet = user_input[:200]
+            rule = obj_match.rule
+            log.info(
+                "ai.OBJECTION_DETECTED",
+                call_id=call_id,
+                objection_type=rule.objection_type,
+                transcript_snippet=snippet,
+            )
+            log.info(
+                "ai.OBJECTION_TYPE_MATCHED",
+                call_id=call_id,
+                objection_type=rule.objection_type,
+                score=obj_match.score,
+                strategy=obj_match.strategy,
+                transcript_snippet=snippet,
+            )
+            instruction = objection_turn_instruction(obj_match)
+            existing_block = merged_ctx.get("dynamic_block")
+            merged_ctx["dynamic_block"] = (
+                f"{existing_block}\n\n{instruction}"
+                if existing_block
+                else instruction
+            )
+            log.info(
+                "ai.OBJECTION_RESPONSE_USED",
+                call_id=call_id,
+                objection_type=rule.objection_type,
+                transcript_snippet=snippet,
+            )
 
         if branch_out.end_call:
             reply_text = branch_out.end_call_message or (
@@ -588,12 +694,23 @@ class AIService:
         duration_ms: int | None = None,
         summarise: bool = True,
         clear_memory: bool = True,
+        meeting_status: str | None = None,
     ) -> dict:
         """Generate the LLM call summary, write everything to Postgres,
-        and (optionally) drop the Redis keys."""
+        and (optionally) drop the Redis keys.
+
+        ``meeting_status`` is a PLACEHOLDER signal (``unknown`` /
+        ``not_booked`` / ``booked``) recorded on the summary row and
+        prepended to the summary text — no scheduling is performed here.
+        """
 
         snapshot = await self._memory.snapshot(call_id)
         qual = snapshot.qualification
+
+        # Fall back to the status stashed in Redis meta by the
+        # orchestrator if the caller didn't pass one explicitly.
+        if meeting_status is None:
+            meeting_status = (snapshot.meta or {}).get("meeting_status")
 
         summary_text: str | None = None
         if summarise and snapshot.history:
@@ -607,6 +724,12 @@ class AIService:
                 )
                 summary_text = None
 
+        if meeting_status:
+            prefix = f"[MEETING_STATUS] {meeting_status}"
+            summary_text = (
+                f"{prefix}\n{summary_text}" if summary_text else prefix
+            )
+
         await asyncio.to_thread(
             self._persist_finalization,
             call_id=call_id,
@@ -614,6 +737,7 @@ class AIService:
             summary=summary_text,
             qual=qual,
             duration_ms=duration_ms,
+            meeting_status=meeting_status,
         )
 
         if clear_memory:
@@ -626,10 +750,12 @@ class AIService:
             qualification_score=qual.score(),
             duration_ms=duration_ms,
             summary_len=len(summary_text or ""),
+            meeting_status=meeting_status,
         )
         return {
             "summary": summary_text,
             "qualification": qual.snapshot().model_dump(),
+            "meeting_status": meeting_status,
         }
 
     def _persist_finalization(
@@ -640,6 +766,7 @@ class AIService:
         summary: str | None,
         qual: QualificationState,
         duration_ms: int | None,
+        meeting_status: str | None = None,
     ) -> None:
         with _db_scope() as db:
             totals = AITranscriptRepository.aggregate(db, call_id)
@@ -653,6 +780,11 @@ class AIService:
                 qualification_score=qual.score(),
                 totals=totals,
                 duration_ms=duration_ms,
+                extra=(
+                    {"meeting_status": meeting_status}
+                    if meeting_status
+                    else None
+                ),
             )
             AICallRepository.mark_status(db, call_id, status="completed")
 

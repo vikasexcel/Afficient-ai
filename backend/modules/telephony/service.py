@@ -185,22 +185,100 @@ class TelephonyService:
         effective_framework = framework or settings.AI_QUALIFICATION_FRAMEWORK
         effective_opening = opening_line
         effective_playbook_id = playbook_id
+        effective_voice_id: str | None = None
+        effective_voice_name: str | None = None
+        effective_voice_provider: str | None = None
+        playbook_runtime = None
 
-        if playbook_id and organization_id:
-            runtime = await asyncio.to_thread(
-                self._load_playbook,
-                organization_id=organization_id,
-                playbook_id=playbook_id,
+        if playbook_id:
+            if not organization_id:
+                raise TelephonyError(
+                    "A playbook requires an organization context to load",
+                    status_code=400,
+                )
+
+            log.info(
+                "telephony.PLAYBOOK_SELECTED",
+                playbook_id=str(playbook_id),
             )
-            effective_persona = runtime.persona_name
-            effective_framework = runtime.framework
-            effective_playbook_id = runtime.playbook_id
-            if not effective_opening and runtime.opening_line:
-                effective_opening = runtime.opening_line
-            extra_context = {
-                **(runtime.default_context or {}),
-                **(extra_context or {}),
-            }
+
+            from modules.playbook.exceptions import PlaybookError
+            from modules.playbook.call_apply import (
+                build_call_extra_context,
+                playbook_application_summary,
+            )
+            from modules.playbook.company import (
+                resolve_agent_name,
+                resolve_opening_line,
+            )
+
+            try:
+                playbook_runtime = await asyncio.to_thread(
+                    self._load_playbook,
+                    organization_id=organization_id,
+                    playbook_id=playbook_id,
+                )
+            except PlaybookError as exc:
+                raise TelephonyError(exc.message, status_code=exc.status_code) from exc
+
+            summary = playbook_application_summary(playbook_runtime)
+            agent_name = resolve_agent_name(playbook_runtime)
+            log.info(
+                "telephony.PLAYBOOK_LOADED",
+                **summary,
+                organization_id=str(organization_id),
+            )
+            log.info(
+                "telephony.AGENT_NAME_LOADED",
+                playbook_id=str(playbook_runtime.playbook_id),
+                agent_name=agent_name,
+            )
+
+            # Playbook is the single source of truth for conversation config.
+            effective_persona = playbook_runtime.persona_name
+            effective_framework = playbook_runtime.framework
+            effective_playbook_id = playbook_runtime.playbook_id
+            effective_voice_id = playbook_runtime.voice_id
+            effective_voice_name = playbook_runtime.voice_name
+            effective_voice_provider = playbook_runtime.voice_provider
+
+            extra_context = build_call_extra_context(
+                playbook_runtime,
+                lead_name=lead_name,
+                lead_phone=lead_phone or to_number,
+                caller_extra=extra_context,
+                playbook_controls_call=True,
+            )
+            effective_opening = resolve_opening_line(
+                playbook_runtime,
+                agent_name=agent_name,
+            )
+
+            log.info(
+                "telephony.PLAYBOOK_APPLIED",
+                room=effective_room,
+                **summary,
+            )
+            log.info(
+                "telephony.AGENT_NAME_APPLIED",
+                playbook_id=str(effective_playbook_id),
+                agent_name=agent_name,
+                opening_line=effective_opening,
+            )
+            resolved_voice = (
+                effective_voice_id or settings.ELEVENLABS_VOICE_ID or None
+            )
+            log.info(
+                "telephony.VOICE_APPLIED",
+                playbook_id=str(effective_playbook_id),
+                playbook_name=summary["playbook_name"],
+                voice_id=resolved_voice,
+                voice_name=effective_voice_name,
+                provider=effective_voice_provider or "elevenlabs",
+                source="playbook" if effective_voice_id else "env_default",
+            )
+        elif extra_context is None:
+            extra_context = {}
 
         # 1. DB row first so we always have an audit trail.
         row = await asyncio.to_thread(
@@ -263,6 +341,9 @@ class TelephonyService:
             framework=effective_framework,
             playbook_id=effective_playbook_id,
             opening_line=effective_opening,
+            voice_id=effective_voice_id,
+            voice_name=effective_voice_name,
+            voice_provider=effective_voice_provider,
             extra_context=self._build_agent_context(
                 lead_name=lead_name,
                 lead_phone=lead_phone or to_number,
@@ -270,15 +351,62 @@ class TelephonyService:
             ),
         )
         await self._registry.register(runner)
+        if effective_playbook_id and playbook_runtime is not None:
+            log.info(
+                "telephony.CALL_STARTED_WITH_PLAYBOOK",
+                room=effective_room,
+                call_id=str(row.id),
+                playbook_id=str(effective_playbook_id),
+                playbook_name=playbook_runtime.name,
+                persona=effective_persona,
+                framework=effective_framework,
+                voice_id=effective_voice_id or settings.ELEVENLABS_VOICE_ID or None,
+            )
         await self._record_event(
             event_type="ai_agent_started",
             telephony_call_id=row.id,
             organization_id=organization_id,
             source="internal",
-            payload={"room": effective_room},
+            payload={
+                "room": effective_room,
+                "playbook_id": str(effective_playbook_id)
+                if effective_playbook_id
+                else None,
+            },
         )
 
-        # 4. Originate via Twilio.
+        # 4. Originate. Preferred path: LiveKit dials the lead directly
+        #    into the agent's room over the outbound SIP trunk. Falls back
+        #    to Twilio TwiML <Dial><Sip> when no outbound trunk is set.
+        if settings.LIVEKIT_SIP_OUTBOUND_TRUNK_ID:
+            row = await asyncio.to_thread(
+                self._apply_status_update,
+                telephony_call_id=row.id,
+                status=CALL_STATUS_INITIATED,
+                initiated_at=datetime.utcnow(),
+                duration_seconds=None,
+                error_code=None,
+                error_message=None,
+                extra_merge={"dial_mode": "livekit_sip"},
+            )
+            asyncio.create_task(
+                self._run_livekit_sip_call(
+                    telephony_call_id=row.id,
+                    room_name=effective_room,
+                    to_number=to_number,
+                    organization_id=organization_id,
+                ),
+                name=f"lk-sip-dial:{effective_room}",
+            )
+            log.info(
+                "telephony.initiate.done",
+                call_id=str(row.id),
+                room=effective_room,
+                dial_mode="livekit_sip",
+            )
+            return row
+
+        # 4b. Originate via Twilio.
         try:
             originated = await self._twilio.create_call(
                 to_number=to_number,
@@ -329,6 +457,172 @@ class TelephonyService:
             room=effective_room,
         )
         return row
+
+    # ------------------------------------------------------------------
+    # LiveKit-originated SIP call lifecycle (background task)
+    # ------------------------------------------------------------------
+
+    async def _run_livekit_sip_call(
+        self,
+        *,
+        telephony_call_id: uuid.UUID,
+        room_name: str,
+        to_number: str,
+        organization_id: uuid.UUID | None,
+    ) -> None:
+        """Dial the lead over LiveKit SIP and drive the row's lifecycle.
+
+        Runs detached from the HTTP request:
+
+        1. ``CreateSIPParticipant`` (blocks until answered / failed).
+        2. On answer → mark ``in-progress``; on failure → map the SIP
+           status to failed / busy / no-answer and stop the agent.
+        3. Poll the room until the caller's SIP participant leaves (hangup)
+           or the agent task ends, then mark ``completed``.
+        """
+
+        result = await self._livekit.create_sip_participant(
+            room_name=room_name,
+            to_number=to_number,
+            trunk_id=settings.LIVEKIT_SIP_OUTBOUND_TRUNK_ID,
+            identity="sip-caller",
+        )
+
+        if not result.answered:
+            status, code = _sip_status_to_call_status(result.sip_status_code)
+            await asyncio.to_thread(
+                self._apply_status_update,
+                telephony_call_id=telephony_call_id,
+                status=status,
+                ended_at=datetime.utcnow(),
+                error_code=code,
+                error_message=result.error,
+                extra_merge={"dial_mode": "livekit_sip"},
+            )
+            await self._record_event(
+                event_type=status,
+                telephony_call_id=telephony_call_id,
+                organization_id=organization_id,
+                source="livekit",
+                payload={
+                    "sip_status_code": result.sip_status_code,
+                    "error": result.error,
+                },
+            )
+            await self._registry.stop(room_name, wait=False)
+            log.info(
+                "telephony.livekit_sip.not_answered",
+                call_id=str(telephony_call_id),
+                room=room_name,
+                status=status,
+                sip_status=result.sip_status_code,
+            )
+            return
+
+        answered_at = datetime.utcnow()
+        await asyncio.to_thread(
+            self._apply_status_update,
+            telephony_call_id=telephony_call_id,
+            status="in-progress",
+            answered_at=answered_at,
+            extra_merge={
+                "dial_mode": "livekit_sip",
+                "sip_call_id": result.sip_call_id,
+            },
+        )
+        if result.sip_call_id:
+            await asyncio.to_thread(
+                self._set_sid,
+                telephony_call_id=telephony_call_id,
+                call_sid=result.sip_call_id,
+                status="in-progress",
+            )
+        await self._record_event(
+            event_type="answered",
+            call_sid=result.sip_call_id,
+            telephony_call_id=telephony_call_id,
+            organization_id=organization_id,
+            source="livekit",
+            payload={"identity": result.identity},
+        )
+        log.info(
+            "telephony.livekit_sip.answered",
+            call_id=str(telephony_call_id),
+            room=room_name,
+            identity=result.identity,
+        )
+
+        # Wait for the call to end: the caller's SIP participant leaves the
+        # room (hangup) or the agent runner finishes (idle timeout / stop).
+        await self._await_call_end(room_name, sip_identity=result.identity)
+
+        duration = max(0, int((datetime.utcnow() - answered_at).total_seconds()))
+        await asyncio.to_thread(
+            self._apply_status_update,
+            telephony_call_id=telephony_call_id,
+            status=CALL_STATUS_COMPLETED,
+            ended_at=datetime.utcnow(),
+            duration_seconds=duration,
+            extra_merge={"dial_mode": "livekit_sip"},
+        )
+        await self._record_event(
+            event_type="completed",
+            call_sid=result.sip_call_id,
+            telephony_call_id=telephony_call_id,
+            organization_id=organization_id,
+            source="livekit",
+            payload={"duration_seconds": duration},
+        )
+        await self._registry.stop(room_name, wait=False)
+        log.info(
+            "telephony.livekit_sip.completed",
+            call_id=str(telephony_call_id),
+            room=room_name,
+            duration_seconds=duration,
+        )
+
+    async def _await_call_end(
+        self,
+        room_name: str,
+        *,
+        sip_identity: str,
+        poll_seconds: float = 2.0,
+        max_seconds: float = 1800.0,
+    ) -> None:
+        """Block until the PSTN caller leaves the room or the agent ends."""
+
+        runner = self._registry.get(room_name)
+        waited = 0.0
+        # Give the participant list a moment to reflect the new SIP leg.
+        seen = False
+        while waited < max_seconds:
+            await asyncio.sleep(poll_seconds)
+            waited += poll_seconds
+
+            if runner is not None and not runner.is_running:
+                return
+
+            try:
+                identities = await self._livekit.list_participant_identities(
+                    room_name
+                )
+            except Exception:  # pragma: no cover — defensive
+                continue
+
+            present = sip_identity in identities
+            if present:
+                seen = True
+                continue
+            # Only treat absence as hangup once we've actually seen the
+            # caller (avoids a startup race before SIP fully registers).
+            if seen:
+                return
+            # If after ~10s the SIP leg never showed and the room has no
+            # non-agent participants, bail out too.
+            if waited >= 10.0 and not any(
+                i not in ("ai-agent", "ai-stt-agent") for i in identities
+            ):
+                return
 
     # ------------------------------------------------------------------
     # Webhook handling
@@ -477,10 +771,12 @@ class TelephonyService:
 
         existing = await asyncio.to_thread(self._fetch_by_sid, call_sid)
         if existing is not None:
-            # Outbound path — orchestrator already running.
-            return existing.room_name, (existing.extra or {}).get(
-                "opening_line"
-            )
+            # Outbound path — orchestrator already running. We return no
+            # ``opening_say`` on purpose: the AI agent speaks the opening
+            # line via ElevenLabs once it detects the caller in the room.
+            # Emitting a Twilio <Say> here would double the opener with a
+            # different (Twilio) voice and mask pipeline issues.
+            return existing.room_name, None
 
         # Inbound path — bootstrap.
         room_name = explicit_room or self._generate_room_name(None)
@@ -558,7 +854,9 @@ class TelephonyService:
             from_=from_number,
             to=to_number,
         )
-        return room_name, opening_line
+        # Opening line is spoken by the AI agent via ElevenLabs once the
+        # caller is detected in the room — not via Twilio <Say>.
+        return room_name, None
 
     # ------------------------------------------------------------------
     # Retry / cancel
@@ -607,6 +905,7 @@ class TelephonyService:
             lead_name=original.lead_name,
             lead_phone=original.lead_phone,
             campaign_id=original.campaign_id,
+            playbook_id=getattr(original, "playbook_id", None),
             persona=persona,
             framework=framework,
             opening_line=opening_line,
@@ -996,6 +1295,20 @@ class TelephonyService:
         if extra:
             ctx.update(extra)
         return ctx
+
+
+def _sip_status_to_call_status(code: int | None) -> tuple[str, str | None]:
+    """Map a SIP response code to our canonical call status + error code."""
+
+    if code is None:
+        return CALL_STATUS_FAILED, "sip_failed"
+    if code in (486, 600):  # Busy Here / Busy Everywhere
+        return "busy", str(code)
+    if code in (480, 408, 487, 603):  # Unavailable / Timeout / Cancelled / Decline
+        return "no-answer", str(code)
+    if code == 404:  # Not Found
+        return CALL_STATUS_FAILED, "404"
+    return CALL_STATUS_FAILED, str(code)
 
 
 def _parse_int(v: Any) -> int | None:

@@ -38,6 +38,22 @@ export type PlaybookBranch = {
   then?: Record<string, unknown>;
 };
 
+export type PlaybookObjection = {
+  objection_type: string;
+  objection_trigger: string;
+  objection_response: string;
+  fallback_response?: string | null;
+};
+
+export type ObjectionMatchResult = {
+  objection_type: string;
+  objection_trigger: string;
+  objection_response: string;
+  fallback_response: string | null;
+  score: number;
+  strategy: string;
+};
+
 export type PlaybookDetail = {
   id: string;
   organization_id: string;
@@ -46,13 +62,24 @@ export type PlaybookDetail = {
   status: PlaybookStatus;
   framework: PlaybookFramework;
   persona_name: string;
+  agent_name: string | null;
   system_prompt: string | null;
   opening_line: string | null;
   default_objective: string | null;
+  voice_provider: string | null;
   voice_id: string | null;
+  voice_name: string | null;
+  voice_gender: string | null;
+  voice_accent: string | null;
+  voice_language: string | null;
+  company_name: string | null;
+  company_intro: string | null;
+  company_description: string | null;
+  value_proposition: string | null;
   default_context: Record<string, unknown> | null;
   disqualifying_patterns: string[] | null;
   branches?: PlaybookBranch[] | null;
+  objections?: PlaybookObjection[] | null;
   version: number;
   fields: PlaybookField[];
   created_at: string;
@@ -64,14 +91,25 @@ export type CreatePlaybookInput = {
   description?: string;
   framework?: PlaybookFramework;
   persona_name?: string;
+  agent_name?: string | null;
   system_prompt?: string;
   opening_line?: string;
   default_objective?: string;
-  voice_id?: string;
+  voice_provider?: string | null;
+  voice_id?: string | null;
+  voice_name?: string | null;
+  voice_gender?: string | null;
+  voice_accent?: string | null;
+  voice_language?: string | null;
+  company_name?: string | null;
+  company_intro?: string | null;
+  company_description?: string | null;
+  value_proposition?: string | null;
   default_context?: Record<string, unknown>;
   disqualifying_patterns?: string[];
   fields?: Omit<PlaybookField, "id" | "created_at" | "updated_at">[];
   branches?: PlaybookBranch[];
+  objections?: PlaybookObjection[];
 };
 
 export type UpdatePlaybookInput = Partial<CreatePlaybookInput>;
@@ -87,6 +125,7 @@ export type PlaybookTestResult = {
   qualification_after: Record<string, unknown>;
   newly_set_fields: string[];
   branches_fired: string[];
+  objection_matched?: ObjectionMatchResult | null;
 };
 
 export type PlaybookVersion = {
@@ -107,6 +146,14 @@ export async function listPlaybooks(activeOnly = false): Promise<PlaybookSummary
 
 export async function getPlaybook(id: string): Promise<PlaybookDetail> {
   const res = await api.get<PlaybookDetail>(`/playbooks/${id}`);
+  return res.data;
+}
+
+/** Load full playbook config for the phone dialer (active/published only). */
+export async function getPlaybookForDialer(id: string): Promise<PlaybookDetail> {
+  const res = await api.get<PlaybookDetail>(`/playbooks/${id}`, {
+    params: { for_dialer: true },
+  });
   return res.data;
 }
 

@@ -342,6 +342,12 @@ async def list_calls(
     call_ids = [r.call_id for r in rows]
     summaries = AICallSummaryRepository.map_for_call_ids(db, call_ids)
 
+    # Bulk-fetch transcript aggregates so calls that haven't been
+    # finalized yet (no summary row) still surface their saved turn
+    # count / token usage / duration in the list. Without this a call
+    # whose transcript rows are fully persisted would show "0 turns".
+    aggregates = AITranscriptRepository.aggregate_many(db, call_ids)
+
     # Bulk-fetch playbooks (1 query instead of N).
     playbook_ids = {r.playbook_id for r in rows if r.playbook_id}
     playbook_names: dict = {}
@@ -356,9 +362,25 @@ async def list_calls(
     entries: list[CallListEntry] = []
     for r in rows:
         summary = summaries.get(r.call_id)
+        agg = aggregates.get(r.call_id, {})
         playbook_name = (
             playbook_names.get(r.playbook_id) if r.playbook_id else None
         )
+
+        # Prefer the finalized summary row; otherwise fall back to the
+        # live transcript aggregate so saved turns are never hidden.
+        total_turns = (
+            summary.total_turns if summary else int(agg.get("total_turns") or 0)
+        )
+        total_tokens = (
+            summary.total_tokens if summary else int(agg.get("total_tokens") or 0)
+        )
+        duration_ms = (
+            summary.duration_ms
+            if summary and summary.duration_ms is not None
+            else agg.get("duration_ms")
+        )
+
         entries.append(
             CallListEntry(
                 call_id=r.call_id,
@@ -377,8 +399,9 @@ async def list_calls(
                 summary=summary.summary if summary else None,
                 qualification_status=summary.qualification_status if summary else None,
                 qualification_score=summary.qualification_score if summary else None,
-                total_turns=summary.total_turns if summary else 0,
-                total_tokens=summary.total_tokens if summary else 0,
+                total_turns=total_turns,
+                total_tokens=total_tokens,
+                duration_ms=duration_ms,
             )
         )
     return CallListResponse(calls=entries)
