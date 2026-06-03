@@ -92,7 +92,7 @@
 import { useForm } from "react-hook-form";
 import { useNavigate, Link } from "react-router-dom";
 import { useState } from "react";
-import { signup } from "@/services/auth";
+import { formatAuthError, signup, validatePassword } from "@/services/auth";
 
 type Form = {
   full_name: string;
@@ -116,8 +116,8 @@ export default function Signup() {
     try {
       await signup(v);
       nav("/login");
-    } catch {
-      setError("Something went wrong. Please try again.");
+    } catch (err) {
+      setError(formatAuthError(err));
     }
   };
 
@@ -269,10 +269,20 @@ export default function Signup() {
                     ? "border-red-500/50 focus:border-red-500/70 focus:ring-2 focus:ring-red-500/10"
                     : "border-white/[0.09] focus:border-violet-500/50 focus:ring-2 focus:ring-violet-500/10"
                   }`}
-                {...register("password", { required: true, minLength: 8 })}
+                {...register("password", {
+                  required: true,
+                  validate: (value) => validatePassword(value) ?? true,
+                })}
               />
-              {errors.password?.type === "minLength" && (
-                <p className="text-[11px] text-red-400 mt-1.5">Must be at least 8 characters</p>
+              {errors.password?.message && (
+                <p className="text-[11px] text-red-400 mt-1.5">
+                  {String(errors.password.message)}
+                </p>
+              )}
+              {!errors.password && (
+                <p className="text-[11px] text-white/25 mt-1.5">
+                  At least 8 characters, with a letter and a number or symbol
+                </p>
               )}
             </div>
 

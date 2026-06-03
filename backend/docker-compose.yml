@@ -50,28 +50,6 @@ services:
       timeout: 3s
       retries: 10
 
-  backend:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: aifficient_backend
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-admin}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-aifficient}
-      REDIS_URL: redis://redis:6379/0
-      LIVEKIT_URL: ws://livekit:7880
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      livekit:
-        condition: service_started
-    ports:
-      - "8000:8000"
-
 volumes:
   aifficient_pgdata:
   aifficient_redisdata:

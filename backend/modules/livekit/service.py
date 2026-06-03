@@ -222,20 +222,32 @@ class LiveKitService:
 
         client = await self._get_client()
         ring = ring_timeout_seconds or settings.LIVEKIT_SIP_RING_TIMEOUT_SECONDS
-        req = lkapi.CreateSIPParticipantRequest(
-            sip_trunk_id=trunk_id,
-            sip_call_to=to_number,
-            room_name=room_name,
-            participant_identity=identity,
-            participant_name=display_name or identity,
-            wait_until_answered=wait_until_answered,
-            play_dialtone=False,
-        )
+        field_names = {
+            f.name for f in lkapi.CreateSIPParticipantRequest.DESCRIPTOR.fields
+        }
+        req_kwargs: dict = {
+            "sip_trunk_id": trunk_id,
+            "sip_call_to": to_number,
+            "room_name": room_name,
+            "participant_identity": identity,
+            "participant_name": display_name or identity,
+            "play_dialtone": False,
+        }
+        if "wait_until_answered" in field_names:
+            req_kwargs["wait_until_answered"] = wait_until_answered
+        elif wait_until_answered:
+            log.warning(
+                "livekit.sip.wait_until_answered_unsupported",
+                room=room_name,
+                hint="upgrade livekit-api to >=1.1.0",
+            )
+        req = lkapi.CreateSIPParticipantRequest(**req_kwargs)
         # ``ringing_timeout`` is a protobuf Duration; set it if supported.
-        try:
-            req.ringing_timeout.FromSeconds(int(ring))
-        except Exception:  # pragma: no cover - older SDKs
-            pass
+        if "ringing_timeout" in field_names:
+            try:
+                req.ringing_timeout.FromSeconds(int(ring))
+            except Exception:  # pragma: no cover - older SDKs
+                pass
 
         try:
             info = await client.sip.create_sip_participant(req)

@@ -481,12 +481,31 @@ class TelephonyService:
            or the agent task ends, then mark ``completed``.
         """
 
-        result = await self._livekit.create_sip_participant(
-            room_name=room_name,
-            to_number=to_number,
-            trunk_id=settings.LIVEKIT_SIP_OUTBOUND_TRUNK_ID,
-            identity="sip-caller",
-        )
+        try:
+            result = await self._livekit.create_sip_participant(
+                room_name=room_name,
+                to_number=to_number,
+                trunk_id=settings.LIVEKIT_SIP_OUTBOUND_TRUNK_ID,
+                identity="sip-caller",
+            )
+        except Exception as exc:
+            log.exception(
+                "telephony.livekit_sip.dial_failed",
+                call_id=str(telephony_call_id),
+                room=room_name,
+                to=to_number,
+            )
+            await asyncio.to_thread(
+                self._apply_status_update,
+                telephony_call_id=telephony_call_id,
+                status=CALL_STATUS_FAILED,
+                ended_at=datetime.utcnow(),
+                error_code="livekit_sip_dial_failed",
+                error_message=str(exc),
+                extra_merge={"dial_mode": "livekit_sip"},
+            )
+            await self._registry.stop(room_name, wait=False)
+            return
 
         if not result.answered:
             status, code = _sip_status_to_call_status(result.sip_status_code)

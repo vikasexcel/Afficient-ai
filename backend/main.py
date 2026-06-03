@@ -81,6 +81,9 @@ app.add_middleware(
         # Vite network URL (public IP) when accessing UI remotely
         "http://116.202.210.102:20197",
         "https://handmade-agreed-dimple.ngrok-free.dev",
+        "https://aifuturegroup.co",
+        "https://www.aifuturegroup.co"
+        
     ],
     # In non-production, accept any localhost/127.0.0.1 port AND any
     # http(s)://host:port so Vite served on a public IP (e.g. for remote

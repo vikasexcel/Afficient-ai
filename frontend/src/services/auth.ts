@@ -30,6 +30,44 @@ export type SignupInput = {
   password: string;
 };
 
+/** Mirrors backend modules/auth/schema.py password rules. */
+export const PASSWORD_MIN_LENGTH = 8;
+export const PASSWORD_MAX_LENGTH = 72;
+
+export function validatePassword(password: string): string | null {
+  const bytes = new TextEncoder().encode(password);
+  if (bytes.length < PASSWORD_MIN_LENGTH) {
+    return `Password must be at least ${PASSWORD_MIN_LENGTH} characters`;
+  }
+  if (bytes.length > PASSWORD_MAX_LENGTH) {
+    return `Password must be at most ${PASSWORD_MAX_LENGTH} characters`;
+  }
+  if (!/[A-Za-z]/.test(password) || !/[^A-Za-z]/.test(password)) {
+    return "Password must contain at least one letter and one number or symbol";
+  }
+  return null;
+}
+
+export function formatAuthError(err: unknown): string {
+  if (!err || typeof err !== "object" || !("response" in err)) {
+    return "Something went wrong. Please try again.";
+  }
+  const detail = (err as { response?: { data?: { detail?: unknown } } })
+    .response?.data?.detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) => {
+        if (!item || typeof item !== "object" || !("msg" in item)) return null;
+        const msg = String((item as { msg: string }).msg);
+        return msg.replace(/^Value error,\s*/i, "");
+      })
+      .filter(Boolean);
+    if (messages.length) return messages.join(" ");
+  }
+  return "Something went wrong. Please try again.";
+}
+
 export type AuthTokens = {
   access_token: string;
   refresh_token: string;
