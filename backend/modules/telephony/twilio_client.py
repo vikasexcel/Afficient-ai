@@ -170,6 +170,8 @@ class TwilioClient:
         dial_timeout_seconds: int | None = None,
         record: bool | None = None,
         answering_machine_detection: bool = False,
+        machine_detection_mode: str | None = None,
+        machine_detection_timeout: int | None = None,
         status_callback_path: str = "/api/v1/telephony/webhooks/status",
         voice_callback_path: str = "/api/v1/telephony/webhooks/voice",
     ) -> OriginatedCall:
@@ -253,8 +255,37 @@ class TwilioClient:
                 f"?room={room_name}&kind=recording"
             )
 
+        # Answering Machine Detection. ``DetectMessageEnd`` makes Twilio wait
+        # for the greeting/beep to finish before fetching the voice TwiML,
+        # which is what we want before dropping a pre-recorded voicemail. The
+        # detected classification arrives as ``AnsweredBy`` on the voice +
+        # status webhooks (see modules.telephony.amd for the mapping).
         if answering_machine_detection:
-            kwargs["machine_detection"] = "Enable"
+            mode = machine_detection_mode or settings.TWILIO_AMD_MODE
+            if mode not in ("Enable", "DetectMessageEnd"):
+                mode = "DetectMessageEnd"
+            kwargs["machine_detection"] = mode
+            timeout = (
+                machine_detection_timeout
+                if machine_detection_timeout is not None
+                else settings.TWILIO_AMD_TIMEOUT_SECONDS
+            )
+            # Twilio accepts 3..59 seconds.
+            kwargs["machine_detection_timeout"] = max(3, min(59, int(timeout)))
+            # Surface AnsweredBy on the status callback too (async AMD).
+            kwargs["status_callback_event"] = [
+                "initiated",
+                "ringing",
+                "answered",
+                "completed",
+            ]
+            log.info(
+                "telephony.twilio.amd_params",
+                room=room_name,
+                to=to_number,
+                machine_detection=kwargs["machine_detection"],
+                machine_detection_timeout=kwargs["machine_detection_timeout"],
+            )
 
         try:
             call = await asyncio.to_thread(
@@ -388,6 +419,27 @@ class TwilioClient:
             f"<Dial answerOnBridge=\"true\"{caller_id_attr}>"
             f"<Sip>{escape(sip_uri)}</Sip>"
             "</Dial>"
+            "</Response>"
+        )
+
+    def build_voicemail_twiml(
+        self,
+        *,
+        recording_url: str,
+    ) -> str:
+        """TwiML that plays a pre-recorded voicemail message, then hangs up.
+
+        Used when AMD classifies the answer as a machine/voicemail and the
+        campaign has voicemail drop enabled. ``<Play>`` streams the configured
+        recording into the call; ``<Hangup>`` ends the leg once playback
+        completes so we don't leave dead air.
+        """
+
+        return (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            "<Response>"
+            f"<Play>{escape(recording_url)}</Play>"
+            "<Hangup/>"
             "</Response>"
         )
 

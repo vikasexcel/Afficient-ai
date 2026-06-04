@@ -17,6 +17,9 @@ export type CallStatus =
 
 export type CallDirection = "outbound" | "inbound";
 
+/** AMD classification of who/what answered. */
+export type AnswerType = "human" | "voicemail" | "unknown";
+
 export type TelephonyCall = {
   id: string;
   call_sid: string | null;
@@ -40,6 +43,13 @@ export type TelephonyCall = {
   error_code: string | null;
   error_message: string | null;
   retry_count: number;
+  // AMD / Voicemail drop.
+  amd_result: AnswerType | null;
+  amd_confidence: number | null;
+  voicemail_detected_at: string | null;
+  voicemail_dropped: boolean;
+  voicemail_dropped_at: string | null;
+  voicemail_recording_url: string | null;
   extra: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
@@ -73,6 +83,9 @@ export type InitiateCallInput = {
   record?: boolean;
   dial_timeout_seconds?: number;
   answering_machine_detection?: boolean;
+  voicemail_enabled?: boolean;
+  voicemail_message_url?: string;
+  amd_unknown_fallback?: AnswerType;
   room_name?: string;
 };
 
@@ -84,7 +97,12 @@ export async function initiateCall(
 }
 
 export async function listCalls(
-  params: { limit?: number; status?: CallStatus } = {}
+  params: {
+    limit?: number;
+    status?: CallStatus;
+    /** Filter by AMD answer classification. */
+    answered_by?: AnswerType;
+  } = {}
 ): Promise<TelephonyCall[]> {
   const res = await api.get<{ calls: TelephonyCall[] }>("/telephony/calls", {
     params,
@@ -130,4 +148,9 @@ export async function cancelCall(callId: string): Promise<TelephonyCall> {
     `/telephony/calls/${encodeURIComponent(callId)}/cancel`
   );
   return res.data;
+}
+
+/** Permanently delete a call record + its event history. */
+export async function deleteCall(callId: string): Promise<void> {
+  await api.delete(`/telephony/calls/${encodeURIComponent(callId)}`);
 }

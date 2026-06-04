@@ -15,10 +15,16 @@ from modules.leads.csv_parser import (
     parse_csv_text,
     validate_row,
 )
-from modules.leads.model import Lead, LeadList
-from modules.leads.repository import LeadListRepository, LeadRepository
+from modules.leads.model import Lead, LeadActivity, LeadList
+from modules.leads.repository import (
+    LeadActivityRepository,
+    LeadListRepository,
+    LeadRepository,
+)
 from modules.leads.schema import (
     CommitUploadInput,
+    CreateLeadInput,
+    UpdateLeadInput,
     UploadParsedRow,
     UploadPreviewResponse,
 )
@@ -73,6 +79,7 @@ class LeadsService:
         organization_id: uuid.UUID,
         *,
         lead_list_id: uuid.UUID | None,
+        search: str | None = None,
         limit: int,
         offset: int,
     ):
@@ -80,9 +87,153 @@ class LeadsService:
             db,
             organization_id,
             lead_list_id=lead_list_id,
+            search=search,
             limit=limit,
             offset=offset,
         )
+
+    @staticmethod
+    def get_lead(
+        db: Session, organization_id: uuid.UUID, lead_id: uuid.UUID
+    ) -> Lead:
+        lead = LeadRepository.get(db, organization_id, lead_id)
+        if lead is None:
+            raise HTTPException(404, "Lead not found")
+        return lead
+
+    @staticmethod
+    def create_lead(
+        db: Session,
+        organization_id: uuid.UUID,
+        data: CreateLeadInput,
+    ) -> Lead:
+        normalized = normalize_phone(data.phone)
+        if len(normalized) < 7:
+            raise HTTPException(422, "phone is not a valid number")
+
+        if (
+            LeadRepository.get_by_normalized_phone(
+                db, organization_id, normalized
+            )
+            is not None
+        ):
+            raise HTTPException(
+                409, "A lead with that phone number already exists"
+            )
+
+        if data.lead_list_id is not None:
+            ll = LeadListRepository.get(
+                db, organization_id, data.lead_list_id
+            )
+            if ll is None:
+                raise HTTPException(404, "Lead list not found")
+
+        lead = Lead(
+            organization_id=organization_id,
+            lead_list_id=data.lead_list_id,
+            name=data.name.strip(),
+            email=data.email,
+            phone=data.phone.strip(),
+            phone_normalized=normalized,
+            company=data.company,
+            industry=data.industry,
+            location=data.location,
+            source=data.source,
+            status=data.status,
+            tags=sorted(set(data.tags)) if data.tags else None,
+            custom_fields=data.custom_fields,
+            notes=data.notes,
+        )
+        try:
+            LeadRepository.create(db, lead)
+            db.flush()
+        except IntegrityError as exc:
+            db.rollback()
+            raise HTTPException(
+                409, "A lead with that phone number already exists"
+            ) from exc
+
+        if data.lead_list_id is not None:
+            LeadListRepository.refresh_count(db, data.lead_list_id)
+        db.commit()
+        db.refresh(lead)
+        return lead
+
+    @staticmethod
+    def update_lead(
+        db: Session,
+        organization_id: uuid.UUID,
+        lead_id: uuid.UUID,
+        data: UpdateLeadInput,
+    ) -> Lead:
+        lead = LeadRepository.get(db, organization_id, lead_id)
+        if lead is None:
+            raise HTTPException(404, "Lead not found")
+
+        fields = data.model_dump(exclude_unset=True)
+        old_list_id = lead.lead_list_id
+
+        # Phone needs special handling: keep ``phone_normalized`` in sync
+        # and re-check the per-org uniqueness constraint.
+        if "phone" in fields and fields["phone"] is not None:
+            normalized = normalize_phone(fields["phone"])
+            if len(normalized) < 7:
+                raise HTTPException(422, "phone is not a valid number")
+            clash = LeadRepository.get_by_normalized_phone(
+                db, organization_id, normalized
+            )
+            if clash is not None and clash.id != lead.id:
+                raise HTTPException(
+                    409, "Another lead already uses that phone number"
+                )
+            lead.phone = fields["phone"].strip()
+            lead.phone_normalized = normalized
+
+        if "name" in fields and fields["name"] is not None:
+            lead.name = fields["name"].strip()
+        if "tags" in fields:
+            tags = fields["tags"]
+            lead.tags = sorted(set(tags)) if tags else None
+
+        for attr in (
+            "email",
+            "company",
+            "industry",
+            "location",
+            "source",
+            "status",
+            "custom_fields",
+            "notes",
+        ):
+            if attr in fields:
+                setattr(lead, attr, fields[attr])
+
+        if "lead_list_id" in fields:
+            new_list_id = fields["lead_list_id"]
+            if new_list_id is not None:
+                ll = LeadListRepository.get(
+                    db, organization_id, new_list_id
+                )
+                if ll is None:
+                    raise HTTPException(404, "Lead list not found")
+            lead.lead_list_id = new_list_id
+
+        try:
+            db.flush()
+        except IntegrityError as exc:
+            db.rollback()
+            raise HTTPException(
+                409, "Another lead already uses that phone number"
+            ) from exc
+
+        # Keep both source and destination list counts accurate.
+        for list_id in {old_list_id, lead.lead_list_id}:
+            if list_id is not None:
+                LeadListRepository.refresh_count(db, list_id)
+
+        db.commit()
+        db.refresh(lead)
+        return lead
 
     @staticmethod
     def delete_lead(
@@ -97,6 +248,48 @@ class LeadsService:
         if list_id is not None:
             LeadListRepository.refresh_count(db, list_id)
         db.commit()
+
+    # ------------------------------------------------------------------ #
+    # Lead activities
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def list_activities(
+        db: Session,
+        organization_id: uuid.UUID,
+        lead_id: uuid.UUID,
+    ) -> list[LeadActivity]:
+        # Ensure the lead exists + belongs to the org before listing.
+        if LeadRepository.get(db, organization_id, lead_id) is None:
+            raise HTTPException(404, "Lead not found")
+        return LeadActivityRepository.list_for_lead(
+            db, organization_id, lead_id
+        )
+
+    @staticmethod
+    def log_activity(
+        db: Session,
+        organization_id: uuid.UUID,
+        user_id: uuid.UUID | None,
+        lead_id: uuid.UUID,
+        *,
+        activity_type: str,
+        notes: str | None,
+    ) -> LeadActivity:
+        if LeadRepository.get(db, organization_id, lead_id) is None:
+            raise HTTPException(404, "Lead not found")
+
+        activity = LeadActivity(
+            organization_id=organization_id,
+            lead_id=lead_id,
+            user_id=user_id,
+            activity_type=activity_type,
+            notes=(notes.strip() if notes else None),
+        )
+        LeadActivityRepository.create(db, activity)
+        db.commit()
+        db.refresh(activity)
+        return activity
 
     # ------------------------------------------------------------------ #
     # CSV upload

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -39,9 +39,9 @@ import { cn } from "@/lib/utils";
 
 import {
   activateCampaign,
+  campaignToDraft,
   createCampaign,
-  newDraftId,
-  upsertDraft,
+  updateCampaign,
 } from "@/services/campaign";
 import {
   listPlaybooks,
@@ -51,6 +51,7 @@ import { listLeadLists, type LeadList } from "@/services/leadList";
 import {
   WEEKDAYS,
   type CampaignDraft,
+  type CampaignOut,
   type Weekday,
 } from "@/types/campaign";
 
@@ -180,18 +181,37 @@ function defaultDraft(): CampaignDraft {
 type Props = {
   /** Optional: render a custom trigger instead of the default button. */
   trigger?: React.ReactNode;
+  /** When set, the dialog edits this existing campaign instead of creating. */
+  campaign?: CampaignOut;
+  /** Controlled open state (optional). Omit for the default trigger flow. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   /** Called after a successful create or launch. */
   onCreated?: (campaignId: string) => void;
-  /** Called after a successful draft save. */
-  onDraftSaved?: () => void;
+  /** Called after any successful save (create, update, or draft). */
+  onSaved?: () => void;
 };
 
 export default function CreateCampaignDialog({
   trigger,
+  campaign,
+  open: controlledOpen,
+  onOpenChange,
   onCreated,
-  onDraftSaved,
+  onSaved,
 }: Props) {
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlledOpen ?? internalOpen;
+  const setOpen = useCallback(
+    (next: boolean) => {
+      if (onOpenChange) onOpenChange(next);
+      else setInternalOpen(next);
+    },
+    [onOpenChange]
+  );
+
+  const isEditing = Boolean(campaign?.id);
+
   const [playbooks, setPlaybooks] = useState<PlaybookSummary[]>([]);
   const [leadLists, setLeadLists] = useState<LeadList[]>([]);
   const [loadingRefs, setLoadingRefs] = useState(false);
@@ -226,8 +246,51 @@ export default function CreateCampaignDialog({
         listPlaybooks(true).catch(() => listPlaybooks()),
         listLeadLists(),
       ]);
-      setPlaybooks(pbs);
-      setLeadLists(lists);
+
+      // When editing, guarantee the campaign's current playbook + lead list
+      // are present as options even if they're filtered out of the default
+      // lists (e.g. a draft/archived playbook excluded by `active_only`).
+      // Otherwise the Select has no matching item and the stored value can't
+      // render, leaving the field looking empty.
+      let mergedPlaybooks = pbs;
+      let mergedLists = lists;
+      if (campaign?.playbook_id && !pbs.some((p) => p.id === campaign.playbook_id)) {
+        mergedPlaybooks = [
+          {
+            id: campaign.playbook_id,
+            name: campaign.playbook_name ?? "Current playbook",
+            description: null,
+            status: "active",
+            framework: "BANT",
+            persona_name: "",
+            version: 1,
+            field_count: 0,
+            created_at: "",
+            updated_at: "",
+          } as PlaybookSummary,
+          ...pbs,
+        ];
+      }
+      if (
+        campaign?.lead_list_id &&
+        !lists.some((l) => l.id === campaign.lead_list_id)
+      ) {
+        mergedLists = [
+          {
+            id: campaign.lead_list_id,
+            name: campaign.lead_list_name ?? "Current lead list",
+            description: null,
+            source: null,
+            lead_count: campaign.lead_count ?? 0,
+            created_at: "",
+            updated_at: "",
+          } as LeadList,
+          ...lists,
+        ];
+      }
+
+      setPlaybooks(mergedPlaybooks);
+      setLeadLists(mergedLists);
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : "Failed to load form data"
@@ -235,42 +298,62 @@ export default function CreateCampaignDialog({
     } finally {
       setLoadingRefs(false);
     }
-  }, []);
+  }, [campaign]);
 
   function handleOpenChange(next: boolean) {
     setOpen(next);
-    if (next && !refsLoadedRef.current) {
+  }
+
+  /* Load reference data whenever the dialog is open. This must run on `open`
+   * (not just inside the trigger's onOpenChange) so the controlled edit
+   * dialog — which mounts already-open — also loads playbooks + lead lists. */
+  useEffect(() => {
+    if (open && !refsLoadedRef.current) {
       refsLoadedRef.current = true;
       void loadRefs();
     }
-  }
+  }, [open, loadRefs]);
+
+  /* Populate the form when (re)opening in edit mode. */
+  useEffect(() => {
+    if (!open) return;
+    if (campaign) {
+      reset(campaignToDraft(campaign) as unknown as FormValues);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, campaign]);
 
   function resetAndClose() {
     reset(defaultDraft() as unknown as FormValues);
     setOpen(false);
   }
 
+  async function persist(values: CampaignDraft): Promise<string> {
+    if (isEditing && campaign) {
+      await updateCampaign(campaign.id, values);
+      return campaign.id;
+    }
+    const created = await createCampaign({ ...values, launch: false });
+    return created.id;
+  }
+
   async function handleSaveDraft() {
-    const values = getValues();
+    const values = getValues() as CampaignDraft;
     const trimmed = values.name?.trim() ?? "";
     if (trimmed.length < 2) {
       form.setError("name", {
-        message: "Give your draft a name (min 2 chars)",
+        message: "Give your campaign a name (min 2 chars)",
       });
       return;
     }
     setSubmitting("draft");
     try {
-      upsertDraft({
-        id: newDraftId(),
-        saved_at: new Date().toISOString(),
-        data: { ...values, name: trimmed } as CampaignDraft,
-      });
-      toast.success("Draft saved");
-      onDraftSaved?.();
+      await persist({ ...values, name: trimmed });
+      toast.success(isEditing ? "Campaign updated" : "Draft saved");
+      onSaved?.();
       resetAndClose();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not save draft");
+      toast.error(err instanceof Error ? err.message : "Could not save");
     } finally {
       setSubmitting(null);
     }
@@ -279,13 +362,20 @@ export default function CreateCampaignDialog({
   const handleLaunch = form.handleSubmit(async (values) => {
     setSubmitting("launch");
     try {
-      const created = await createCampaign({
-        ...(values as CampaignDraft),
-        launch: true,
-      });
+      const campaignId = await persist(values as CampaignDraft);
       try {
-        await activateCampaign(created.id);
-        toast.success(`Campaign "${values.name}" launched`);
+        const res = await activateCampaign(campaignId);
+        if (res.scheduled) {
+          toast.success(
+            res.message ?? `Campaign "${values.name}" scheduled`
+          );
+        } else {
+          const n = res.enqueued_leads ?? 0;
+          toast.success(
+            `Campaign "${values.name}" launched` +
+              (n ? ` · ${n} lead${n === 1 ? "" : "s"} queued` : "")
+          );
+        }
       } catch (activateErr) {
         toast.warning(
           `Campaign saved but launch failed: ${
@@ -293,11 +383,12 @@ export default function CreateCampaignDialog({
           }`
         );
       }
-      onCreated?.(created.id);
+      onCreated?.(campaignId);
+      onSaved?.();
       resetAndClose();
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to create campaign"
+        err instanceof Error ? err.message : "Failed to save campaign"
       );
     } finally {
       setSubmitting(null);
@@ -306,14 +397,16 @@ export default function CreateCampaignDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogTrigger asChild>
-        {trigger ?? (
-          <Button className="bg-violet-600 hover:bg-violet-500 text-white">
-            <Plus size={14} />
-            New Campaign
-          </Button>
-        )}
-      </DialogTrigger>
+      {controlledOpen === undefined && (
+        <DialogTrigger asChild>
+          {trigger ?? (
+            <Button className="bg-violet-600 hover:bg-violet-500 text-white">
+              <Plus size={14} />
+              New Campaign
+            </Button>
+          )}
+        </DialogTrigger>
+      )}
 
       <DialogContent className="sm:max-w-2xl p-0 gap-0 bg-[#0c0c10] border border-white/[0.08] ring-0">
         <DialogHeader className="px-5 pt-5 pb-4 border-b border-white/[0.06]">
@@ -323,7 +416,7 @@ export default function CreateCampaignDialog({
             </div>
             <div>
               <DialogTitle className="text-[15px] text-white">
-                Create campaign
+                {isEditing ? "Edit campaign" : "Create campaign"}
               </DialogTitle>
               <DialogDescription className="text-[12px] text-white/45 mt-0.5">
                 Configure targeting, schedule, and calling hours. Save as
@@ -684,7 +777,7 @@ export default function CreateCampaignDialog({
               ) : (
                 <Save size={13} />
               )}
-              Save draft
+              {isEditing ? "Save changes" : "Save draft"}
             </Button>
             <Button
               type="button"

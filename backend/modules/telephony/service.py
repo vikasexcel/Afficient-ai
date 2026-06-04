@@ -30,6 +30,12 @@ from sqlalchemy.orm import Session
 from common.logging import get_logger
 from config.settings import settings
 from database.session import SessionLocal
+from modules.telephony.amd import (
+    AMD_UNKNOWN,
+    AMD_VOICEMAIL,
+    detect_answer_type,
+)
+from modules.campaign.voicemail import resolve_voicemail_config
 from modules.livekit.exceptions import LiveKitError
 from modules.livekit.schema import CreateRoomRequest
 from modules.livekit.service import LiveKitService
@@ -158,8 +164,12 @@ class TelephonyService:
         record: bool | None = None,
         dial_timeout_seconds: int | None = None,
         answering_machine_detection: bool = False,
+        voicemail_enabled: bool | None = None,
+        voicemail_message_url: str | None = None,
+        amd_unknown_fallback: str | None = None,
         parent_call_id: uuid.UUID | None = None,
         retry_count: int = 0,
+        execution_id: uuid.UUID | None = None,
     ) -> TelephonyCall:
         """Full outbound flow.
 
@@ -280,6 +290,41 @@ class TelephonyService:
         elif extra_context is None:
             extra_context = {}
 
+        # Resolve AMD / voicemail-drop settings. Explicit per-call params win;
+        # otherwise inherit the linked campaign's ``voicemail_config``. AMD is
+        # turned on whenever voicemail drop is desired (or explicitly asked)
+        # and the global ``TWILIO_AMD_ENABLED`` switch is on.
+        vm_settings = await self._resolve_voicemail_settings(
+            campaign_id=campaign_id,
+            voicemail_enabled=voicemail_enabled,
+            voicemail_message_url=voicemail_message_url,
+            amd_unknown_fallback=amd_unknown_fallback,
+        )
+        amd_on = bool(answering_machine_detection)
+        if vm_settings["voicemail_enabled"] and settings.TWILIO_AMD_ENABLED:
+            amd_on = True
+
+        log.info(
+            "telephony.initiate.amd_resolved",
+            org=str(organization_id) if organization_id else None,
+            campaign_id=str(campaign_id) if campaign_id else None,
+            amd_on=amd_on,
+            amd_enabled_global=settings.TWILIO_AMD_ENABLED,
+            voicemail_enabled=vm_settings["voicemail_enabled"],
+            has_recording=bool(vm_settings["voicemail_message_url"]),
+            unknown_fallback=vm_settings["amd_unknown_fallback"],
+        )
+
+        voicemail_extra = (
+            {
+                "enabled": vm_settings["voicemail_enabled"],
+                "message_url": vm_settings["voicemail_message_url"],
+                "unknown_fallback": vm_settings["amd_unknown_fallback"],
+            }
+            if (vm_settings["voicemail_enabled"] or amd_on)
+            else None
+        )
+
         # 1. DB row first so we always have an audit trail.
         row = await asyncio.to_thread(
             self._insert_call_row,
@@ -299,6 +344,8 @@ class TelephonyService:
             parent_call_id=parent_call_id,
             retry_count=retry_count,
             playbook_id=effective_playbook_id,
+            voicemail=voicemail_extra,
+            execution_id=execution_id,
         )
 
         log.info(
@@ -378,7 +425,36 @@ class TelephonyService:
         # 4. Originate. Preferred path: LiveKit dials the lead directly
         #    into the agent's room over the outbound SIP trunk. Falls back
         #    to Twilio TwiML <Dial><Sip> when no outbound trunk is set.
-        if settings.LIVEKIT_SIP_OUTBOUND_TRUNK_ID:
+        #
+        #    IMPORTANT: LiveKit ``CreateSIPParticipant`` has no Answering
+        #    Machine Detection. When AMD / voicemail drop is requested we MUST
+        #    originate via Twilio (which runs AMD and posts ``AnsweredBy`` to
+        #    the voice webhook so we can drop a voicemail). Twilio still
+        #    bridges humans into the same agent room via <Dial><Sip> using
+        #    ``LIVEKIT_SIP_URI``. Routing AMD calls down the LiveKit-SIP path
+        #    silently disables the entire AMD/voicemail feature — that was the
+        #    root cause of "AMD not working in actual calls".
+        if settings.LIVEKIT_SIP_OUTBOUND_TRUNK_ID and amd_on:
+            if not settings.LIVEKIT_SIP_URI:
+                log.warning(
+                    "telephony.initiate.amd_without_sip_bridge",
+                    call_id=str(row.id),
+                    room=effective_room,
+                    detail=(
+                        "AMD requires the Twilio origination path but "
+                        "LIVEKIT_SIP_URI is unset; humans cannot be bridged "
+                        "to the AI agent. Set LIVEKIT_SIP_URI."
+                    ),
+                )
+            log.info(
+                "telephony.initiate.amd_forces_twilio_path",
+                call_id=str(row.id),
+                room=effective_room,
+                outbound_trunk=settings.LIVEKIT_SIP_OUTBOUND_TRUNK_ID,
+                reason="livekit_sip_originate_has_no_amd",
+            )
+
+        if settings.LIVEKIT_SIP_OUTBOUND_TRUNK_ID and not amd_on:
             row = await asyncio.to_thread(
                 self._apply_status_update,
                 telephony_call_id=row.id,
@@ -414,7 +490,7 @@ class TelephonyService:
                 room_name=effective_room,
                 dial_timeout_seconds=dial_timeout_seconds,
                 record=record,
-                answering_machine_detection=answering_machine_detection,
+                answering_machine_detection=amd_on,
             )
         except TelephonyError as exc:
             await self._mark_failed(
@@ -644,6 +720,86 @@ class TelephonyService:
                 return
 
     # ------------------------------------------------------------------
+    # AMD / Voicemail drop
+    # ------------------------------------------------------------------
+
+    async def _resolve_voicemail_settings(
+        self,
+        *,
+        campaign_id: uuid.UUID | None,
+        voicemail_enabled: bool | None,
+        voicemail_message_url: str | None,
+        amd_unknown_fallback: str | None,
+    ) -> dict:
+        """Merge explicit per-call voicemail params with the campaign config.
+
+        Explicit (non-None) params override; anything omitted is inherited
+        from the linked campaign's ``voicemail_config``.
+        """
+
+        campaign_cfg: dict | None = None
+        if campaign_id is not None:
+            campaign_cfg = await asyncio.to_thread(
+                self._fetch_campaign_voicemail_config, campaign_id
+            )
+        resolved = resolve_voicemail_config(campaign_cfg)
+
+        enabled = (
+            resolved.enabled
+            if voicemail_enabled is None
+            else bool(voicemail_enabled)
+        )
+        message_url = voicemail_message_url or resolved.message_url
+        fallback = amd_unknown_fallback or resolved.unknown_fallback
+        return {
+            "voicemail_enabled": enabled,
+            "voicemail_message_url": message_url,
+            "amd_unknown_fallback": fallback,
+        }
+
+    @staticmethod
+    def _fetch_campaign_voicemail_config(
+        campaign_id: uuid.UUID,
+    ) -> dict | None:
+        from modules.campaign.model import Campaign
+
+        with _db_scope() as db:
+            campaign = db.get(Campaign, campaign_id)
+            return campaign.voicemail_config if campaign else None
+
+    def _apply_amd_update(
+        self,
+        *,
+        telephony_call_id: uuid.UUID,
+        amd_result: str | None = None,
+        amd_confidence: float | None = None,
+        voicemail_detected_at: datetime | None = None,
+        voicemail_dropped: bool | None = None,
+        voicemail_dropped_at: datetime | None = None,
+        voicemail_recording_url: str | None = None,
+    ) -> TelephonyCall:
+        with _db_scope() as db:
+            row = TelephonyCallRepository.get(db, telephony_call_id)
+            if row is None:
+                raise CallNotFoundError(
+                    f"call {telephony_call_id} not found"
+                )
+            updated = TelephonyCallRepository.update_amd(
+                db,
+                row,
+                amd_result=amd_result,
+                amd_confidence=amd_confidence,
+                voicemail_detected_at=voicemail_detected_at,
+                voicemail_dropped=voicemail_dropped,
+                voicemail_dropped_at=voicemail_dropped_at,
+                voicemail_recording_url=voicemail_recording_url,
+            )
+            return _detach_call(db, updated)
+
+    def build_voicemail_twiml(self, *, recording_url: str) -> str:
+        return self._twilio.build_voicemail_twiml(recording_url=recording_url)
+
+    # ------------------------------------------------------------------
     # Webhook handling
     # ------------------------------------------------------------------
 
@@ -714,6 +870,31 @@ class TelephonyService:
             extra_merge={"last_twilio_status": twilio_status},
         )
 
+        # Capture AMD classification when Twilio reports it on the status
+        # callback (async AMD path). The voice webhook handles the sync path.
+        answered_by = params.get("AnsweredBy")
+        if answered_by:
+            amd = detect_answer_type(
+                answered_by,
+                confidence=_parse_float(params.get("MachineDetectionConfidence")),
+                provider="twilio",
+            )
+            await asyncio.to_thread(
+                self._apply_amd_update,
+                telephony_call_id=row.id,
+                amd_result=amd.result,
+                amd_confidence=amd.confidence,
+                voicemail_detected_at=(
+                    now if amd.result == AMD_VOICEMAIL else None
+                ),
+            )
+            log.info(
+                "telephony.webhook.amd",
+                call_sid=call_sid,
+                answered_by=answered_by,
+                amd_result=amd.result,
+            )
+
         # Append event.
         await self._record_event(
             event_type=twilio_status or mapped,
@@ -735,6 +916,45 @@ class TelephonyService:
 
         # If terminal, signal the AI agent to wrap up.
         if mapped in TERMINAL_STATUSES:
+            # Voicemail playback tracking: a call that dropped a voicemail and
+            # then reaches ``completed`` played the recording to the end; any
+            # other terminal status (failed/busy/no-answer/canceled) means the
+            # drop did not complete cleanly.
+            if getattr(row, "voicemail_dropped", False):
+                playback_ok = mapped == CALL_STATUS_COMPLETED
+                playback_status = "completed" if playback_ok else "failed"
+                await asyncio.to_thread(
+                    self._apply_status_update,
+                    telephony_call_id=row.id,
+                    status=mapped,
+                    extra_merge={
+                        "voicemail_playback": {
+                            "status": playback_status,
+                            "final_call_status": mapped,
+                            "duration_seconds": duration_seconds,
+                        }
+                    },
+                )
+                await self._record_event(
+                    event_type=f"voicemail_playback_{playback_status}",
+                    call_sid=call_sid,
+                    telephony_call_id=row.id,
+                    organization_id=row.organization_id,
+                    source="internal",
+                    payload={
+                        "final_status": mapped,
+                        "duration_seconds": duration_seconds,
+                        "recording_url": row.voicemail_recording_url,
+                    },
+                )
+                log.info(
+                    f"telephony.voicemail.playback.{playback_status}",
+                    call_sid=call_sid,
+                    final_status=mapped,
+                    duration_seconds=duration_seconds,
+                    recording_url=row.voicemail_recording_url,
+                )
+
             await self._registry.stop(row.room_name, wait=False)
             await self._record_event(
                 event_type="ai_agent_stopped",
@@ -744,6 +964,10 @@ class TelephonyService:
                 source="internal",
                 payload={"final_status": mapped},
             )
+
+            # Reconcile the terminal outcome back onto a linked campaign
+            # execution (RC5: campaign → call → outcome → retry/metrics).
+            await self._reconcile_campaign_execution(row, mapped)
 
         return row
 
@@ -769,18 +993,20 @@ class TelephonyService:
         from_number: str | None,
         to_number: str | None,
         explicit_room: str | None = None,
-    ) -> tuple[str, str | None]:
+        answered_by: str | None = None,
+    ) -> tuple[str, str | None, str | None]:
         """Voice webhook entry point.
 
-        Returns ``(room_name, opening_line_or_none)``. The router uses the
-        room name to build the SIP TwiML.
+        Returns ``(room_name, opening_line_or_none, voicemail_url_or_none)``.
+        When ``voicemail_url`` is set the router plays that recording (voicemail
+        drop) instead of bridging the call into the AI room.
 
         Two cases:
 
         * Outbound (we originated this call): ``call_sid`` was set on a
-          ``telephony_calls`` row by :meth:`initiate_outbound`. The row's
-          stored ``room_name`` is returned and the agent runner is
-          already in the room.
+          ``telephony_calls`` row by :meth:`initiate_outbound`. AMD's
+          ``answered_by`` (Twilio sync AMD) decides whether to continue the AI
+          conversation (human / fallback) or drop a voicemail (machine).
 
         * Inbound (someone dialled our Twilio number): no row exists yet.
           We create one, mint a fresh room, spawn an AI agent runner
@@ -790,12 +1016,16 @@ class TelephonyService:
 
         existing = await asyncio.to_thread(self._fetch_by_sid, call_sid)
         if existing is not None:
-            # Outbound path — orchestrator already running. We return no
-            # ``opening_say`` on purpose: the AI agent speaks the opening
-            # line via ElevenLabs once it detects the caller in the room.
-            # Emitting a Twilio <Say> here would double the opener with a
+            # Outbound path — orchestrator already running. AMD may divert the
+            # call to a voicemail drop; otherwise we bridge to the AI room.
+            voicemail_url = await self._handle_amd_on_answer(
+                existing, answered_by
+            )
+            # We return no ``opening_say`` on purpose: the AI agent speaks the
+            # opening line via ElevenLabs once it detects the caller in the
+            # room. Emitting a Twilio <Say> here would double the opener with a
             # different (Twilio) voice and mask pipeline issues.
-            return existing.room_name, None
+            return existing.room_name, None, voicemail_url
 
         # Inbound path — bootstrap.
         room_name = explicit_room or self._generate_room_name(None)
@@ -875,7 +1105,166 @@ class TelephonyService:
         )
         # Opening line is spoken by the AI agent via ElevenLabs once the
         # caller is detected in the room — not via Twilio <Say>.
-        return room_name, None
+        return room_name, None, None
+
+    async def _handle_amd_on_answer(
+        self,
+        row: TelephonyCall,
+        answered_by: str | None,
+    ) -> str | None:
+        """Record AMD result + decide voicemail drop on call answer.
+
+        Returns the recording URL to play when a voicemail drop should happen,
+        otherwise ``None`` (continue the AI conversation).
+
+        Decision table (per the campaign call-flow spec):
+
+        * ``human``    -> continue AI conversation (no drop)
+        * ``voicemail``-> drop if enabled + recording configured, else continue
+        * ``unknown``  -> configurable fallback (default: continue)
+        """
+
+        if not answered_by:
+            return None
+
+        amd = detect_answer_type(answered_by, provider="twilio")
+        vm = (row.extra or {}).get("voicemail") or {}
+        now = datetime.utcnow()
+
+        should_drop = False
+        if vm.get("enabled") and vm.get("message_url"):
+            if amd.result == AMD_VOICEMAIL:
+                should_drop = True
+            elif (
+                amd.result == AMD_UNKNOWN
+                and (vm.get("unknown_fallback") or "human") == AMD_VOICEMAIL
+            ):
+                should_drop = True
+
+        recording_url = vm.get("message_url") if should_drop else None
+
+        await asyncio.to_thread(
+            self._apply_amd_update,
+            telephony_call_id=row.id,
+            amd_result=amd.result,
+            amd_confidence=amd.confidence,
+            voicemail_detected_at=(
+                now if amd.result == AMD_VOICEMAIL else None
+            ),
+            voicemail_dropped=True if should_drop else None,
+            voicemail_dropped_at=now if should_drop else None,
+            voicemail_recording_url=recording_url,
+        )
+
+        log.info(
+            "telephony.amd.on_answer",
+            call_sid=row.call_sid,
+            room=row.room_name,
+            answered_by=answered_by,
+            amd_result=amd.result,
+            voicemail_drop=should_drop,
+        )
+
+        if should_drop:
+            # No AI conversation — stop the agent sitting in the room so it
+            # doesn't talk over the voicemail playback, and audit the drop.
+            await self._registry.stop(row.room_name, wait=False)
+            await self._record_event(
+                event_type="voicemail_dropped",
+                call_sid=row.call_sid,
+                telephony_call_id=row.id,
+                organization_id=row.organization_id,
+                source="internal",
+                payload={
+                    "recording_url": recording_url,
+                    "answered_by": answered_by,
+                    "amd_result": amd.result,
+                },
+            )
+            return recording_url
+
+        return None
+
+    # ------------------------------------------------------------------
+    # Campaign execution reconciliation (RC5)
+    # ------------------------------------------------------------------
+
+    # Twilio terminal call-status -> campaign execution outcome.
+    _OUTCOME_MAP = {
+        CALL_STATUS_COMPLETED: "completed",
+        "no-answer": "no_answer",
+        "busy": "busy",
+        CALL_STATUS_FAILED: "failed",
+        CALL_STATUS_CANCELED: "failed",
+    }
+
+    async def _reconcile_campaign_execution(
+        self, row: TelephonyCall, mapped_status: str
+    ) -> None:
+        """Map a terminal call outcome back onto its campaign execution.
+
+        When a call was placed by the campaign worker (``initiate_outbound``
+        with ``execution_id``), the lifecycle finishes asynchronously via this
+        webhook. We translate the final call status (and AMD/voicemail-drop
+        result) into a campaign outcome and run the retry engine so metrics +
+        retries advance. No-op for ad-hoc (non-campaign) calls.
+        """
+
+        extra = row.extra or {}
+        execution_id = extra.get("campaign_execution_id")
+        if not execution_id:
+            return
+
+        if getattr(row, "voicemail_dropped", False) or (
+            row.amd_result == AMD_VOICEMAIL
+        ):
+            outcome = "voicemail"
+        else:
+            outcome = self._OUTCOME_MAP.get(mapped_status, "failed")
+
+        try:
+            await asyncio.to_thread(
+                self._run_execution_outcome,
+                execution_id=uuid.UUID(str(execution_id)),
+                outcome=outcome,
+            )
+        except Exception:  # pragma: no cover - defensive
+            log.exception(
+                "telephony.reconcile.failed",
+                execution_id=str(execution_id),
+                call_id=str(row.id),
+                outcome=outcome,
+            )
+            return
+
+        log.info(
+            "telephony.reconcile.applied",
+            execution_id=str(execution_id),
+            call_id=str(row.id),
+            final_status=mapped_status,
+            outcome=outcome,
+        )
+
+    @staticmethod
+    def _run_execution_outcome(
+        *, execution_id: uuid.UUID, outcome: str
+    ) -> None:
+        from modules.campaign.execution_model import Execution
+        from modules.campaign.retry import process_outcome
+        from modules.campaign.worker import _campaign_configs
+
+        with _db_scope() as db:
+            execution = db.get(Execution, execution_id)
+            if execution is None:
+                return
+            retry_config, voicemail_config = _campaign_configs(db, execution)
+            process_outcome(
+                db,
+                execution,
+                outcome,
+                retry_config=retry_config,
+                voicemail_config=voicemail_config,
+            )
 
     # ------------------------------------------------------------------
     # Retry / cancel
@@ -910,6 +1299,7 @@ class TelephonyService:
         persona = extra.get("persona")
         framework = extra.get("framework")
         extra_context = extra.get("extra_context") or {}
+        vm = extra.get("voicemail") or {}
 
         # Polite back-off so we don't hammer the carrier.
         if settings.TWILIO_RETRY_BACKOFF_SECONDS > 0:
@@ -929,6 +1319,9 @@ class TelephonyService:
             framework=framework,
             opening_line=opening_line,
             extra_context=extra_context,
+            voicemail_enabled=vm.get("enabled") if vm else None,
+            voicemail_message_url=vm.get("message_url") if vm else None,
+            amd_unknown_fallback=vm.get("unknown_fallback") if vm else None,
             parent_call_id=original.id,
             retry_count=original.retry_count + 1,
         )
@@ -977,6 +1370,38 @@ class TelephonyService:
         )
         return row
 
+    async def delete_call(
+        self,
+        *,
+        call_id: uuid.UUID,
+        organization_id: uuid.UUID | None,
+    ) -> None:
+        """Permanently remove a call record + its event history.
+
+        If the call is still in flight we best-effort cancel it first so
+        we don't orphan a live Twilio leg / AI agent, then delete the row.
+        Tenant scoping is enforced by the caller (router).
+        """
+
+        row = await asyncio.to_thread(self._fetch_by_id, call_id)
+        if row is None:
+            raise CallNotFoundError(f"call {call_id} not found")
+
+        if row.status not in TERMINAL_STATUSES:
+            try:
+                await self.cancel(
+                    call_id=call_id, organization_id=organization_id
+                )
+            except Exception as exc:  # pragma: no cover - best effort
+                log.warning(
+                    "telephony.delete.cancel_failed",
+                    call_id=str(call_id),
+                    error=str(exc),
+                )
+
+        await asyncio.to_thread(self._delete_row, call_id)
+        log.info("telephony.delete.done", call_id=str(call_id))
+
     # ------------------------------------------------------------------
     # Read APIs
     # ------------------------------------------------------------------
@@ -993,6 +1418,7 @@ class TelephonyService:
         organization_id: uuid.UUID | None,
         limit: int = 50,
         status: str | None = None,
+        answered_by: str | None = None,
     ) -> list[TelephonyCall]:
         return list(
             await asyncio.to_thread(
@@ -1000,6 +1426,7 @@ class TelephonyService:
                 organization_id=organization_id,
                 limit=limit,
                 status=status,
+                answered_by=answered_by,
             )
         )
 
@@ -1026,6 +1453,8 @@ class TelephonyService:
         parent_call_id: uuid.UUID | None,
         retry_count: int,
         playbook_id: uuid.UUID | None = None,
+        voicemail: dict | None = None,
+        execution_id: uuid.UUID | None = None,
     ) -> TelephonyCall:
         extra = {
             "persona": persona,
@@ -1036,6 +1465,10 @@ class TelephonyService:
             extra["opening_line"] = opening_line
         if playbook_id:
             extra["playbook_id"] = str(playbook_id)
+        if voicemail:
+            extra["voicemail"] = voicemail
+        if execution_id:
+            extra["campaign_execution_id"] = str(execution_id)
         with _db_scope() as db:
             row = TelephonyCallRepository.create(
                 db,
@@ -1160,6 +1593,13 @@ class TelephonyService:
         with _db_scope() as db:
             return _detach_call(db, TelephonyCallRepository.get(db, call_id))
 
+    def _delete_row(self, call_id: uuid.UUID) -> None:
+        with _db_scope() as db:
+            row = TelephonyCallRepository.get(db, call_id)
+            if row is None:
+                return
+            TelephonyCallRepository.delete(db, row)
+
     def _fetch_by_sid(self, call_sid: str) -> TelephonyCall | None:
         with _db_scope() as db:
             return _detach_call(
@@ -1172,6 +1612,7 @@ class TelephonyService:
         organization_id: uuid.UUID | None,
         limit: int,
         status: str | None,
+        answered_by: str | None = None,
     ):
         with _db_scope() as db:
             rows = TelephonyCallRepository.list_recent(
@@ -1179,6 +1620,7 @@ class TelephonyService:
                 organization_id=organization_id,
                 limit=limit,
                 status=status,
+                answered_by=answered_by,
             )
             return _detach_calls(db, rows)
 

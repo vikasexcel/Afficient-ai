@@ -44,6 +44,21 @@ ALL_LEAD_STATUSES = frozenset(
 )
 
 
+ACTIVITY_TYPE_CALL = "call"
+ACTIVITY_TYPE_EMAIL = "email"
+ACTIVITY_TYPE_MEETING = "meeting"
+ACTIVITY_TYPE_NOTE = "note"
+
+ALL_ACTIVITY_TYPES = frozenset(
+    {
+        ACTIVITY_TYPE_CALL,
+        ACTIVITY_TYPE_EMAIL,
+        ACTIVITY_TYPE_MEETING,
+        ACTIVITY_TYPE_NOTE,
+    }
+)
+
+
 class LeadList(BaseModel):
     """A named, segmentable collection of leads."""
 
@@ -123,6 +138,13 @@ class Lead(BaseModel):
         "LeadList", back_populates="leads"
     )
 
+    activities: Mapped[list["LeadActivity"]] = relationship(
+        "LeadActivity",
+        back_populates="lead",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
     __table_args__ = (
         UniqueConstraint(
             "organization_id",
@@ -132,9 +154,48 @@ class Lead(BaseModel):
     )
 
 
+class LeadActivity(BaseModel):
+    """A timestamped touchpoint logged against a lead.
+
+    Captures the kind of interaction (call / email / meeting / note),
+    free-form notes, the acting user, and — via ``created_at`` — the
+    moment it happened. Org-scoped for tenant isolation and indexed by
+    ``(lead_id, created_at)`` so a lead's history loads newest-first.
+    """
+
+    __tablename__ = "lead_activities"
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id"),
+        nullable=False,
+        index=True,
+    )
+    lead_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("leads.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=True,
+    )
+
+    activity_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    lead: Mapped["Lead"] = relationship("Lead", back_populates="activities")
+
+
 # Common access pattern: "list leads for org, newest first".
 Index(
     "ix_leads_org_created",
     Lead.organization_id,
     Lead.created_at,
+)
+
+# A lead's activity history, newest-first.
+Index(
+    "ix_lead_activities_lead_created",
+    LeadActivity.lead_id,
+    LeadActivity.created_at,
 )

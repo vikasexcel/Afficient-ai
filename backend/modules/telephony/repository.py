@@ -140,18 +140,147 @@ class TelephonyCallRepository:
         return row
 
     @staticmethod
+    def update_amd(
+        db: Session,
+        row: TelephonyCall,
+        *,
+        amd_result: str | None = None,
+        amd_confidence: float | None = None,
+        voicemail_detected_at: datetime | None = None,
+        voicemail_dropped: bool | None = None,
+        voicemail_dropped_at: datetime | None = None,
+        voicemail_recording_url: str | None = None,
+    ) -> TelephonyCall:
+        """Patch AMD / voicemail-drop columns on a call row.
+
+        Each field is applied only when provided so repeated webhooks (e.g. a
+        late status callback after the voice webhook already dropped a
+        voicemail) never clobber earlier state.
+        """
+
+        if amd_result is not None:
+            row.amd_result = amd_result
+        if amd_confidence is not None:
+            row.amd_confidence = amd_confidence
+        if voicemail_detected_at is not None and row.voicemail_detected_at is None:
+            row.voicemail_detected_at = voicemail_detected_at
+        if voicemail_dropped is not None:
+            row.voicemail_dropped = voicemail_dropped
+        if voicemail_dropped_at is not None and row.voicemail_dropped_at is None:
+            row.voicemail_dropped_at = voicemail_dropped_at
+        if voicemail_recording_url is not None:
+            row.voicemail_recording_url = voicemail_recording_url
+        db.flush()
+        return row
+
+    @staticmethod
+    def voicemail_metrics(db: Session, campaign_id: uuid.UUID) -> dict:
+        """Aggregate AMD / voicemail-drop counters for one campaign.
+
+        Sourced from ``telephony_calls`` (the canonical call record). A
+        "voicemail retry" is a child call (``parent_call_id`` set) whose parent
+        was classified as voicemail.
+        """
+
+        from sqlalchemy import func, select
+        from sqlalchemy.orm import aliased
+
+        human = int(
+            db.execute(
+                select(func.count())
+                .select_from(TelephonyCall)
+                .where(
+                    TelephonyCall.campaign_id == campaign_id,
+                    TelephonyCall.amd_result == "human",
+                )
+            ).scalar_one()
+        )
+        detected = int(
+            db.execute(
+                select(func.count())
+                .select_from(TelephonyCall)
+                .where(
+                    TelephonyCall.campaign_id == campaign_id,
+                    TelephonyCall.amd_result == "voicemail",
+                )
+            ).scalar_one()
+        )
+        dropped = int(
+            db.execute(
+                select(func.count())
+                .select_from(TelephonyCall)
+                .where(
+                    TelephonyCall.campaign_id == campaign_id,
+                    TelephonyCall.voicemail_dropped.is_(True),
+                )
+            ).scalar_one()
+        )
+
+        parent = aliased(TelephonyCall)
+        retry_count = int(
+            db.execute(
+                select(func.count())
+                .select_from(TelephonyCall)
+                .join(parent, TelephonyCall.parent_call_id == parent.id)
+                .where(
+                    TelephonyCall.campaign_id == campaign_id,
+                    parent.amd_result == "voicemail",
+                )
+            ).scalar_one()
+        )
+
+        success_rate = round(dropped / detected, 3) if detected else 0.0
+        return {
+            "human_answered": human,
+            "voicemail_detected": detected,
+            "voicemail_dropped": dropped,
+            "voicemail_retry_count": retry_count,
+            "voicemail_success_rate": success_rate,
+        }
+
+    @staticmethod
+    def delete(db: Session, row: TelephonyCall) -> None:
+        """Delete a call row and its associated audit events.
+
+        ``telephony_events`` and the self-referential ``parent_call_id``
+        both point back at this row, so we clear those references first to
+        avoid FK violations:
+
+        * Events are part of this call's history → deleted with it.
+        * Retry children point at this row via ``parent_call_id`` → we null
+          the link so the children survive as standalone records.
+        """
+
+        db.query(TelephonyEvent).filter(
+            TelephonyEvent.telephony_call_id == row.id
+        ).delete(synchronize_session=False)
+
+        db.query(TelephonyCall).filter(
+            TelephonyCall.parent_call_id == row.id
+        ).update(
+            {TelephonyCall.parent_call_id: None},
+            synchronize_session=False,
+        )
+
+        db.delete(row)
+        db.flush()
+
+    @staticmethod
     def list_recent(
         db: Session,
         *,
         organization_id: uuid.UUID | None,
         limit: int = 50,
         status: str | None = None,
+        answered_by: str | None = None,
     ) -> Sequence[TelephonyCall]:
         q = db.query(TelephonyCall)
         if organization_id is not None:
             q = q.filter(TelephonyCall.organization_id == organization_id)
         if status:
             q = q.filter(TelephonyCall.status == status)
+        if answered_by:
+            q = q.filter(TelephonyCall.amd_result == answered_by.strip().lower())
         return (
             q.order_by(desc(TelephonyCall.created_at))
             .limit(max(1, min(limit, 200)))

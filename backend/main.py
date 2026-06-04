@@ -1,7 +1,9 @@
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from common.logging import configure_logging, get_logger
 from common.security.protection import RateLimitMiddleware
@@ -113,6 +115,26 @@ for r in (
     lead_lists_router,
 ):
     app.include_router(r, prefix=settings.API_PREFIX)
+
+
+# Serve uploaded voicemail recordings over a public route so Twilio's cloud
+# can fetch them for ``<Play>`` voicemail drops. The directory + route are
+# configurable; the Twilio-reachable URL is built in
+# ``modules.campaign.voicemail.store_recording``.
+_vm_dir = settings.VOICEMAIL_UPLOAD_DIR
+try:
+    os.makedirs(_vm_dir, exist_ok=True)
+    app.mount(
+        "/" + settings.VOICEMAIL_PUBLIC_ROUTE.strip("/"),
+        StaticFiles(directory=_vm_dir),
+        name="voicemail-recordings",
+    )
+except OSError:
+    # A read-only FS shouldn't crash startup; uploads will fail later with a
+    # clear error and operators can configure voicemail_message_url instead.
+    get_logger("app").warning(
+        "app.voicemail_mount_failed", directory=_vm_dir
+    )
 
 
 @app.get("/")

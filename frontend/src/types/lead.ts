@@ -33,6 +33,40 @@ export type LeadList = {
   updated_at: string;
 };
 
+export type ActivityType = "call" | "email" | "meeting" | "note";
+
+export type LeadActivity = {
+  id: string;
+  lead_id: string;
+  user_id: string | null;
+  activity_type: ActivityType;
+  notes: string | null;
+  created_at: string;
+};
+
+export type CreateLeadInput = {
+  name: string;
+  phone: string;
+  email?: string | null;
+  company?: string | null;
+  industry?: string | null;
+  location?: string | null;
+  source?: string | null;
+  status?: LeadStatus;
+  lead_list_id?: string | null;
+  tags?: string[] | null;
+};
+
+export type UpdateLeadInput = {
+  name?: string;
+  phone?: string;
+  email?: string | null;
+  company?: string | null;
+  industry?: string | null;
+  status?: LeadStatus;
+  tags?: string[] | null;
+};
+
 /** A canonical column id our auto-mapper understands. */
 export type LeadColumnId =
   | "name"

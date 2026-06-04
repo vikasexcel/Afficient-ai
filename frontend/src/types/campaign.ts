@@ -1,4 +1,47 @@
-export type CampaignStatus = "draft" | "scheduled" | "active" | "paused" | "archived";
+export type CampaignStatus =
+  | "draft"
+  | "scheduled"
+  | "active"
+  | "paused"
+  | "completed"
+  | "archived";
+
+export type RetryConfig = {
+  max_attempts: number;
+  backoff_minutes: number;
+  retry_on: string[];
+};
+
+/** AMD / Voicemail-drop configuration (campaign voicemail settings). */
+export type VoicemailConfig = {
+  voicemail_enabled: boolean;
+  voicemail_message_url: string | null;
+  retry_on_voicemail: boolean;
+  amd_unknown_fallback: "human" | "voicemail";
+};
+
+/** Campaign metrics (GET /campaigns/{id}/metrics). */
+export type CampaignMetrics = {
+  campaign_id: string;
+  status: string;
+  total_leads: number;
+  queued_leads: number;
+  active_calls: number;
+  completed_calls: number;
+  failed_calls: number;
+  pending_leads: number;
+  progress_percent: number;
+  retry_count: number;
+  retry_success_rate: number;
+  exhausted_retries: number;
+  average_attempts_per_call: number;
+  // AMD / Voicemail-drop.
+  human_answered: number;
+  voicemail_detected: number;
+  voicemail_dropped: number;
+  voicemail_retry_count: number;
+  voicemail_success_rate: number;
+};
 
 export type Campaign = {
   id: string;
@@ -12,6 +55,25 @@ export type Campaign = {
   business_hours?: BusinessHours | null;
   created_at?: string;
   updated_at?: string;
+};
+
+/** Full campaign record returned by the backend (GET /campaigns). */
+export type CampaignOut = {
+  id: string;
+  name: string;
+  status: CampaignStatus | string;
+  playbook_id: string | null;
+  lead_list_id: string | null;
+  scheduled_at: string | null;
+  timezone: string | null;
+  business_hours: BusinessHours | null;
+  retry_config: RetryConfig | null;
+  voicemail_config: VoicemailConfig | null;
+  created_at: string;
+  updated_at: string;
+  playbook_name: string | null;
+  lead_list_name: string | null;
+  lead_count: number | null;
 };
 
 export type Weekday = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";

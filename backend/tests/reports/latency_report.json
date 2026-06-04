@@ -1,11 +1,11 @@
 {
-  "generated_at": "2026-06-03T11:00:01.725930+00:00",
-  "duration_s": 23.348,
+  "generated_at": "2026-06-04T11:18:30.615504+00:00",
+  "duration_s": 53.194,
   "totals": {
-    "samples": 1030,
+    "samples": 2799,
     "failures": 0,
-    "categories": 4,
-    "metrics": 20,
+    "categories": 13,
+    "metrics": 57,
     "overall_success_rate": 1.0
   },
   "slos": {
@@ -66,13 +66,13 @@
         "count": 30,
         "successes": 30,
         "failures": 0,
-        "avg_ms": 7.547,
-        "min_ms": 1.577,
-        "max_ms": 148.06,
-        "p50_ms": 2.189,
-        "p95_ms": 8.738,
-        "p99_ms": 107.875,
-        "stddev_ms": 26.147,
+        "avg_ms": 2.216,
+        "min_ms": 1.703,
+        "max_ms": 3.555,
+        "p50_ms": 2.179,
+        "p95_ms": 2.59,
+        "p99_ms": 3.284,
+        "stddev_ms": 0.344,
         "success_rate": 1.0,
         "failure_rate": 0.0,
         "metadata": {
@@ -93,13 +93,13 @@
         "count": 30,
         "successes": 30,
         "failures": 0,
-        "avg_ms": 6.412,
-        "min_ms": 5.172,
-        "max_ms": 9.522,
-        "p50_ms": 6.038,
-        "p95_ms": 8.715,
-        "p99_ms": 9.336,
-        "stddev_ms": 1.092,
+        "avg_ms": 8.07,
+        "min_ms": 6.889,
+        "max_ms": 9.792,
+        "p50_ms": 8.127,
+        "p95_ms": 9.29,
+        "p99_ms": 9.673,
+        "stddev_ms": 0.834,
         "success_rate": 1.0,
         "failure_rate": 0.0,
         "metadata": {},
@@ -118,13 +118,13 @@
         "count": 30,
         "successes": 30,
         "failures": 0,
-        "avg_ms": 10.571,
-        "min_ms": 8.718,
-        "max_ms": 18.279,
-        "p50_ms": 9.866,
-        "p95_ms": 13.553,
-        "p99_ms": 17.092,
-        "stddev_ms": 1.945,
+        "avg_ms": 12.393,
+        "min_ms": 10.07,
+        "max_ms": 19.912,
+        "p50_ms": 11.302,
+        "p95_ms": 18.855,
+        "p99_ms": 19.722,
+        "stddev_ms": 2.566,
         "success_rate": 1.0,
         "failure_rate": 0.0,
         "metadata": {},
@@ -143,13 +143,13 @@
         "count": 30,
         "successes": 30,
         "failures": 0,
-        "avg_ms": 9.179,
-        "min_ms": 5.654,
-        "max_ms": 20.431,
-        "p50_ms": 8.45,
-        "p95_ms": 15.82,
-        "p99_ms": 19.252,
-        "stddev_ms": 3.255,
+        "avg_ms": 9.423,
+        "min_ms": 7.958,
+        "max_ms": 12.43,
+        "p50_ms": 9.388,
+        "p95_ms": 10.72,
+        "p99_ms": 11.995,
+        "stddev_ms": 0.88,
         "success_rate": 1.0,
         "failure_rate": 0.0,
         "metadata": {},
@@ -168,13 +168,13 @@
         "count": 30,
         "successes": 30,
         "failures": 0,
-        "avg_ms": 5.54,
-        "min_ms": 4.525,
-        "max_ms": 8.592,
-        "p50_ms": 5.297,
-        "p95_ms": 6.754,
-        "p99_ms": 8.09,
-        "stddev_ms": 0.867,
+        "avg_ms": 6.579,
+        "min_ms": 5.663,
+        "max_ms": 7.472,
+        "p50_ms": 6.545,
+        "p95_ms": 7.329,
+        "p99_ms": 7.437,
+        "stddev_ms": 0.451,
         "success_rate": 1.0,
         "failure_rate": 0.0,
         "metadata": {},
@@ -193,13 +193,13 @@
         "count": 30,
         "successes": 30,
         "failures": 0,
-        "avg_ms": 2.352,
-        "min_ms": 1.379,
-        "max_ms": 6.918,
-        "p50_ms": 1.903,
-        "p95_ms": 5.923,
-        "p99_ms": 6.656,
-        "stddev_ms": 1.353,
+        "avg_ms": 2.072,
+        "min_ms": 1.481,
+        "max_ms": 3.426,
+        "p50_ms": 2.041,
+        "p95_ms": 2.902,
+        "p99_ms": 3.333,
+        "stddev_ms": 0.444,
         "success_rate": 1.0,
         "failure_rate": 0.0,
         "metadata": {},
@@ -218,13 +218,13 @@
         "count": 30,
         "successes": 30,
         "failures": 0,
-        "avg_ms": 9.894,
-        "min_ms": 7.239,
-        "max_ms": 14.372,
-        "p50_ms": 9.608,
-        "p95_ms": 12.381,
-        "p99_ms": 13.834,
-        "stddev_ms": 1.71,
+        "avg_ms": 21.965,
+        "min_ms": 14.595,
+        "max_ms": 37.472,
+        "p50_ms": 22.124,
+        "p95_ms": 33.413,
+        "p99_ms": 37.47,
+        "stddev_ms": 5.781,
         "success_rate": 1.0,
         "failure_rate": 0.0,
         "metadata": {},
@@ -243,13 +243,13 @@
         "count": 30,
         "successes": 30,
         "failures": 0,
-        "avg_ms": 22.145,
-        "min_ms": 16.81,
-        "max_ms": 40.734,
-        "p50_ms": 20.177,
-        "p95_ms": 33.929,
-        "p99_ms": 39.885,
-        "stddev_ms": 5.526,
+        "avg_ms": 26.051,
+        "min_ms": 17.964,
+        "max_ms": 50.885,
+        "p50_ms": 23.965,
+        "p95_ms": 37.271,
+        "p99_ms": 47.195,
+        "stddev_ms": 6.984,
         "success_rate": 1.0,
         "failure_rate": 0.0,
         "metadata": {},
@@ -268,13 +268,13 @@
         "count": 30,
         "successes": 30,
         "failures": 0,
-        "avg_ms": 11.343,
-        "min_ms": 8.532,
-        "max_ms": 23.468,
-        "p50_ms": 9.982,
-        "p95_ms": 17.019,
-        "p99_ms": 22.132,
-        "stddev_ms": 3.291,
+        "avg_ms": 20.636,
+        "min_ms": 12.704,
+        "max_ms": 37.402,
+        "p50_ms": 19.422,
+        "p95_ms": 33.897,
+        "p99_ms": 36.446,
+        "stddev_ms": 5.907,
         "success_rate": 1.0,
         "failure_rate": 0.0,
         "metadata": {},
@@ -295,13 +295,13 @@
         "count": 10,
         "successes": 10,
         "failures": 0,
-        "avg_ms": 9.725,
-        "min_ms": 7.507,
-        "max_ms": 16.699,
-        "p50_ms": 9.031,
-        "p95_ms": 13.963,
-        "p99_ms": 16.151,
-        "stddev_ms": 2.442,
+        "avg_ms": 12.933,
+        "min_ms": 9.639,
+        "max_ms": 24.401,
+        "p50_ms": 11.474,
+        "p95_ms": 20.249,
+        "p99_ms": 23.571,
+        "stddev_ms": 4.281,
         "success_rate": 1.0,
         "failure_rate": 0.0,
         "metadata": {},
@@ -320,13 +320,13 @@
         "count": 10,
         "successes": 10,
         "failures": 0,
-        "avg_ms": 244.124,
-        "min_ms": 237.651,
-        "max_ms": 248.918,
-        "p50_ms": 245.106,
-        "p95_ms": 248.746,
-        "p99_ms": 248.884,
-        "stddev_ms": 3.907,
+        "avg_ms": 354.334,
+        "min_ms": 324.977,
+        "max_ms": 413.347,
+        "p50_ms": 345.76,
+        "p95_ms": 407.006,
+        "p99_ms": 412.079,
+        "stddev_ms": 28.278,
         "success_rate": 1.0,
         "failure_rate": 0.0,
         "metadata": {},
@@ -345,13 +345,13 @@
         "count": 10,
         "successes": 10,
         "failures": 0,
-        "avg_ms": 250.552,
-        "min_ms": 244.121,
-        "max_ms": 266.926,
-        "p50_ms": 247.352,
-        "p95_ms": 264.13,
-        "p99_ms": 266.367,
-        "stddev_ms": 7.252,
+        "avg_ms": 354.762,
+        "min_ms": 326.412,
+        "max_ms": 398.36,
+        "p50_ms": 344.465,
+        "p95_ms": 395.12,
+        "p99_ms": 397.712,
+        "stddev_ms": 25.091,
         "success_rate": 1.0,
         "failure_rate": 0.0,
         "metadata": {},
@@ -370,13 +370,13 @@
         "count": 5,
         "successes": 5,
         "failures": 0,
-        "avg_ms": 230.925,
-        "min_ms": 228.933,
-        "max_ms": 234.705,
-        "p50_ms": 230.024,
-        "p95_ms": 233.979,
-        "p99_ms": 234.56,
-        "stddev_ms": 2.008,
+        "avg_ms": 324.122,
+        "min_ms": 307.284,
+        "max_ms": 337.997,
+        "p50_ms": 324.283,
+        "p95_ms": 337.408,
+        "p99_ms": 337.88,
+        "stddev_ms": 11.502,
         "success_rate": 1.0,
         "failure_rate": 0.0,
         "metadata": {},
@@ -395,19 +395,362 @@
         "count": 5,
         "successes": 5,
         "failures": 0,
-        "avg_ms": 232.812,
-        "min_ms": 228.554,
-        "max_ms": 241.376,
-        "p50_ms": 231.181,
-        "p95_ms": 239.488,
-        "p99_ms": 240.999,
-        "stddev_ms": 4.431,
+        "avg_ms": 330.436,
+        "min_ms": 310.776,
+        "max_ms": 354.488,
+        "p50_ms": 321.281,
+        "p95_ms": 354.369,
+        "p99_ms": 354.464,
+        "stddev_ms": 19.74,
         "success_rate": 1.0,
         "failure_rate": 0.0,
         "metadata": {},
         "slo": {
           "p99_ms": 1500.0,
           "avg_ms": 400.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      }
+    ],
+    "barge_in": [
+      {
+        "category": "barge_in",
+        "name": "InterruptionLog.record (Redis)",
+        "count": 30,
+        "successes": 30,
+        "failures": 0,
+        "avg_ms": 0.751,
+        "min_ms": 0.433,
+        "max_ms": 3.342,
+        "p50_ms": 0.574,
+        "p95_ms": 1.534,
+        "p99_ms": 2.819,
+        "stddev_ms": 0.559,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {},
+        "slo": {
+          "p99_ms": 400.0,
+          "avg_ms": 150.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      },
+      {
+        "category": "barge_in",
+        "name": "InterruptionMetrics.record",
+        "count": 90,
+        "successes": 90,
+        "failures": 0,
+        "avg_ms": 0.001,
+        "min_ms": 0.001,
+        "max_ms": 0.011,
+        "p50_ms": 0.001,
+        "p95_ms": 0.002,
+        "p99_ms": 0.005,
+        "stddev_ms": 0.001,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {},
+        "slo": {
+          "p99_ms": 400.0,
+          "avg_ms": 150.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      },
+      {
+        "category": "barge_in",
+        "name": "TTSSession.interrupt (fake)",
+        "count": 30,
+        "successes": 30,
+        "failures": 0,
+        "avg_ms": 0.086,
+        "min_ms": 0.054,
+        "max_ms": 0.325,
+        "p50_ms": 0.063,
+        "p95_ms": 0.237,
+        "p99_ms": 0.31,
+        "stddev_ms": 0.063,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {
+          "mode": "fake"
+        },
+        "slo": {
+          "p99_ms": 400.0,
+          "avg_ms": 150.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      },
+      {
+        "category": "barge_in",
+        "name": "cooldown gate check",
+        "count": 30,
+        "successes": 30,
+        "failures": 0,
+        "avg_ms": 0.001,
+        "min_ms": 0.0,
+        "max_ms": 0.004,
+        "p50_ms": 0.001,
+        "p95_ms": 0.001,
+        "p99_ms": 0.003,
+        "stddev_ms": 0.001,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {},
+        "slo": {
+          "p99_ms": 400.0,
+          "avg_ms": 150.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      }
+    ],
+    "db": [
+      {
+        "category": "db",
+        "name": "JOIN membership \u00d7 organization",
+        "count": 30,
+        "successes": 30,
+        "failures": 0,
+        "avg_ms": 3.755,
+        "min_ms": 2.486,
+        "max_ms": 7.602,
+        "p50_ms": 3.381,
+        "p95_ms": 6.5,
+        "p99_ms": 7.399,
+        "stddev_ms": 1.183,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {},
+        "slo": {
+          "p99_ms": 100.0,
+          "avg_ms": 20.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      },
+      {
+        "category": "db",
+        "name": "SELECT 1",
+        "count": 30,
+        "successes": 30,
+        "failures": 0,
+        "avg_ms": 2.16,
+        "min_ms": 1.163,
+        "max_ms": 5.966,
+        "p50_ms": 1.786,
+        "p95_ms": 4.417,
+        "p99_ms": 5.572,
+        "stddev_ms": 1.094,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {},
+        "slo": {
+          "p99_ms": 100.0,
+          "avg_ms": 20.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      },
+      {
+        "category": "db",
+        "name": "SELECT audit_logs ORDER BY created_at",
+        "count": 30,
+        "successes": 30,
+        "failures": 0,
+        "avg_ms": 3.265,
+        "min_ms": 2.174,
+        "max_ms": 8.855,
+        "p50_ms": 2.9,
+        "p95_ms": 4.923,
+        "p99_ms": 7.889,
+        "stddev_ms": 1.244,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {},
+        "slo": {
+          "p99_ms": 100.0,
+          "avg_ms": 20.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      },
+      {
+        "category": "db",
+        "name": "SELECT user by id",
+        "count": 30,
+        "successes": 30,
+        "failures": 0,
+        "avg_ms": 2.799,
+        "min_ms": 1.91,
+        "max_ms": 5.038,
+        "p50_ms": 2.501,
+        "p95_ms": 4.282,
+        "p99_ms": 4.832,
+        "stddev_ms": 0.796,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {},
+        "slo": {
+          "p99_ms": 100.0,
+          "avg_ms": 20.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      },
+      {
+        "category": "db",
+        "name": "Session open+close",
+        "count": 30,
+        "successes": 30,
+        "failures": 0,
+        "avg_ms": 0.02,
+        "min_ms": 0.014,
+        "max_ms": 0.062,
+        "p50_ms": 0.016,
+        "p95_ms": 0.029,
+        "p99_ms": 0.053,
+        "stddev_ms": 0.009,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {},
+        "slo": {
+          "p99_ms": 100.0,
+          "avg_ms": 20.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      }
+    ],
+    "deepgram_stt": [
+      {
+        "category": "deepgram_stt",
+        "name": "events() one turn (fake)",
+        "count": 20,
+        "successes": 20,
+        "failures": 0,
+        "avg_ms": 0.034,
+        "min_ms": 0.026,
+        "max_ms": 0.133,
+        "p50_ms": 0.027,
+        "p95_ms": 0.06,
+        "p99_ms": 0.118,
+        "stddev_ms": 0.024,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {
+          "mode": "fake"
+        },
+        "slo": {
+          "p99_ms": 1500.0,
+          "avg_ms": 500.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      },
+      {
+        "category": "deepgram_stt",
+        "name": "speech_started -> partial (fake)",
+        "count": 20,
+        "successes": 20,
+        "failures": 0,
+        "avg_ms": 0.049,
+        "min_ms": 0.036,
+        "max_ms": 0.132,
+        "p50_ms": 0.041,
+        "p95_ms": 0.087,
+        "p99_ms": 0.123,
+        "stddev_ms": 0.022,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {
+          "mode": "fake"
+        },
+        "slo": {
+          "p99_ms": 1500.0,
+          "avg_ms": 500.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      }
+    ],
+    "elevenlabs_tts": [
+      {
+        "category": "elevenlabs_tts",
+        "name": "stream_pcm (fake)",
+        "count": 20,
+        "successes": 20,
+        "failures": 0,
+        "avg_ms": 9.227,
+        "min_ms": 8.825,
+        "max_ms": 12.075,
+        "p50_ms": 8.978,
+        "p95_ms": 9.867,
+        "p99_ms": 11.634,
+        "stddev_ms": 0.697,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {
+          "mode": "fake"
+        },
+        "slo": {
+          "p99_ms": 2500.0,
+          "avg_ms": 900.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      },
+      {
+        "category": "elevenlabs_tts",
+        "name": "stream_pcm TTFB (fake)",
+        "count": 20,
+        "successes": 20,
+        "failures": 0,
+        "avg_ms": 2.547,
+        "min_ms": 2.272,
+        "max_ms": 5.101,
+        "p50_ms": 2.388,
+        "p95_ms": 2.886,
+        "p99_ms": 4.658,
+        "stddev_ms": 0.599,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {
+          "mode": "fake"
+        },
+        "slo": {
+          "p99_ms": 2500.0,
+          "avg_ms": 900.0
         },
         "slo_breach": {
           "p99_ms": false,
@@ -422,13 +765,13 @@
         "count": 200,
         "successes": 200,
         "failures": 0,
-        "avg_ms": 0.078,
-        "min_ms": 0.072,
-        "max_ms": 0.22,
-        "p50_ms": 0.074,
-        "p95_ms": 0.097,
-        "p99_ms": 0.117,
-        "stddev_ms": 0.015,
+        "avg_ms": 0.068,
+        "min_ms": 0.044,
+        "max_ms": 0.313,
+        "p50_ms": 0.052,
+        "p95_ms": 0.128,
+        "p99_ms": 0.277,
+        "stddev_ms": 0.042,
         "success_rate": 1.0,
         "failure_rate": 0.0,
         "metadata": {},
@@ -447,13 +790,13 @@
         "count": 200,
         "successes": 200,
         "failures": 0,
-        "avg_ms": 0.113,
-        "min_ms": 0.063,
-        "max_ms": 0.421,
-        "p50_ms": 0.112,
-        "p95_ms": 0.142,
-        "p99_ms": 0.176,
-        "stddev_ms": 0.033,
+        "avg_ms": 0.098,
+        "min_ms": 0.069,
+        "max_ms": 0.499,
+        "p50_ms": 0.077,
+        "p95_ms": 0.164,
+        "p99_ms": 0.327,
+        "stddev_ms": 0.05,
         "success_rate": 1.0,
         "failure_rate": 0.0,
         "metadata": {},
@@ -467,20 +810,221 @@
         }
       }
     ],
+    "livekit": [
+      {
+        "category": "livekit",
+        "name": "generate_token",
+        "count": 100,
+        "successes": 100,
+        "failures": 0,
+        "avg_ms": 0.286,
+        "min_ms": 0.152,
+        "max_ms": 1.178,
+        "p50_ms": 0.224,
+        "p95_ms": 0.599,
+        "p99_ms": 0.752,
+        "stddev_ms": 0.161,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {},
+        "slo": {
+          "p99_ms": 1500.0,
+          "avg_ms": 600.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      }
+    ],
+    "openai_gpt": [
+      {
+        "category": "openai_gpt",
+        "name": "complete (fake)",
+        "count": 20,
+        "successes": 20,
+        "failures": 0,
+        "avg_ms": 10.287,
+        "min_ms": 10.216,
+        "max_ms": 10.399,
+        "p50_ms": 10.275,
+        "p95_ms": 10.38,
+        "p99_ms": 10.396,
+        "stddev_ms": 0.049,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {
+          "mode": "fake"
+        },
+        "slo": {
+          "p99_ms": 4000.0,
+          "avg_ms": 1500.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      },
+      {
+        "category": "openai_gpt",
+        "name": "stream_collected (fake)",
+        "count": 20,
+        "successes": 20,
+        "failures": 0,
+        "avg_ms": 10.343,
+        "min_ms": 10.207,
+        "max_ms": 10.81,
+        "p50_ms": 10.298,
+        "p95_ms": 10.671,
+        "p99_ms": 10.782,
+        "stddev_ms": 0.144,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {
+          "mode": "fake"
+        },
+        "slo": {
+          "p99_ms": 4000.0,
+          "avg_ms": 1500.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      }
+    ],
     "perf": [
+      {
+        "category": "perf",
+        "name": "csv annotate_duplicates \u00d7 1000",
+        "count": 1,
+        "successes": 1,
+        "failures": 0,
+        "avg_ms": 1.617,
+        "min_ms": 1.617,
+        "max_ms": 1.617,
+        "p50_ms": 1.617,
+        "p95_ms": 1.617,
+        "p99_ms": 1.617,
+        "stddev_ms": 0.0,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {
+          "rows": 1000
+        }
+      },
+      {
+        "category": "perf",
+        "name": "csv parse_csv_text (1000 rows)",
+        "count": 1,
+        "successes": 1,
+        "failures": 0,
+        "avg_ms": 3.35,
+        "min_ms": 3.35,
+        "max_ms": 3.35,
+        "p50_ms": 3.35,
+        "p95_ms": 3.35,
+        "p99_ms": 3.35,
+        "stddev_ms": 0.0,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {
+          "rows": 1000
+        }
+      },
+      {
+        "category": "perf",
+        "name": "csv validate_row \u00d7 1000",
+        "count": 1,
+        "successes": 1,
+        "failures": 0,
+        "avg_ms": 7.994,
+        "min_ms": 7.994,
+        "max_ms": 7.994,
+        "p50_ms": 7.994,
+        "p95_ms": 7.994,
+        "p99_ms": 7.994,
+        "stddev_ms": 0.0,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {
+          "rows": 1000,
+          "rows_per_s": 125101
+        }
+      },
+      {
+        "category": "perf",
+        "name": "db SELECT 1 (concurrent)",
+        "count": 80,
+        "successes": 80,
+        "failures": 0,
+        "avg_ms": 7.529,
+        "min_ms": 1.665,
+        "max_ms": 45.356,
+        "p50_ms": 6.113,
+        "p95_ms": 14.238,
+        "p99_ms": 35.76,
+        "stddev_ms": 6.609,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {
+          "concurrency": 8,
+          "requests": 80
+        }
+      },
+      {
+        "category": "perf",
+        "name": "jwt create+decode (concurrent)",
+        "count": 400,
+        "successes": 400,
+        "failures": 0,
+        "avg_ms": 0.373,
+        "min_ms": 0.145,
+        "max_ms": 51.857,
+        "p50_ms": 0.207,
+        "p95_ms": 0.456,
+        "p99_ms": 0.767,
+        "stddev_ms": 2.581,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {
+          "concurrency": 16,
+          "requests": 400
+        }
+      },
+      {
+        "category": "perf",
+        "name": "redis SET+GET+DEL",
+        "count": 300,
+        "successes": 300,
+        "failures": 0,
+        "avg_ms": 9.297,
+        "min_ms": 5.764,
+        "max_ms": 40.284,
+        "p50_ms": 8.112,
+        "p95_ms": 21.47,
+        "p99_ms": 35.081,
+        "stddev_ms": 5.126,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {
+          "concurrency": 16,
+          "requests": 300
+        }
+      },
       {
         "category": "perf",
         "name": "throughput /",
         "count": 80,
         "successes": 80,
         "failures": 0,
-        "avg_ms": 11.596,
-        "min_ms": 4.529,
-        "max_ms": 18.737,
-        "p50_ms": 12.236,
-        "p95_ms": 15.415,
-        "p99_ms": 16.894,
-        "stddev_ms": 3.049,
+        "avg_ms": 23.122,
+        "min_ms": 9.283,
+        "max_ms": 45.913,
+        "p50_ms": 21.373,
+        "p95_ms": 39.606,
+        "p99_ms": 43.987,
+        "stddev_ms": 8.35,
         "success_rate": 1.0,
         "failure_rate": 0.0,
         "metadata": {
@@ -495,13 +1039,13 @@
         "count": 80,
         "successes": 80,
         "failures": 0,
-        "avg_ms": 57.35,
-        "min_ms": 26.922,
-        "max_ms": 116.488,
-        "p50_ms": 51.855,
-        "p95_ms": 107.936,
-        "p99_ms": 112.253,
-        "stddev_ms": 21.2,
+        "avg_ms": 85.714,
+        "min_ms": 35.719,
+        "max_ms": 167.621,
+        "p50_ms": 71.671,
+        "p95_ms": 158.731,
+        "p99_ms": 161.706,
+        "stddev_ms": 33.795,
         "success_rate": 1.0,
         "failure_rate": 0.0,
         "metadata": {
@@ -516,13 +1060,13 @@
         "count": 80,
         "successes": 80,
         "failures": 0,
-        "avg_ms": 12.075,
-        "min_ms": 4.072,
-        "max_ms": 17.605,
-        "p50_ms": 12.373,
-        "p95_ms": 16.918,
-        "p99_ms": 17.585,
-        "stddev_ms": 3.011,
+        "avg_ms": 23.335,
+        "min_ms": 6.483,
+        "max_ms": 39.594,
+        "p50_ms": 24.103,
+        "p95_ms": 35.262,
+        "p99_ms": 39.143,
+        "stddev_ms": 7.626,
         "success_rate": 1.0,
         "failure_rate": 0.0,
         "metadata": {
@@ -537,19 +1081,416 @@
         "count": 80,
         "successes": 80,
         "failures": 0,
-        "avg_ms": 63.978,
-        "min_ms": 29.834,
-        "max_ms": 120.222,
-        "p50_ms": 60.114,
-        "p95_ms": 112.904,
-        "p99_ms": 118.155,
-        "stddev_ms": 18.622,
+        "avg_ms": 117.318,
+        "min_ms": 51.782,
+        "max_ms": 209.809,
+        "p50_ms": 112.543,
+        "p95_ms": 191.063,
+        "p99_ms": 196.545,
+        "stddev_ms": 42.319,
         "success_rate": 1.0,
         "failure_rate": 0.0,
         "metadata": {
           "concurrency": 8,
           "requests": 80,
           "status": 200
+        }
+      }
+    ],
+    "redis": [
+      {
+        "category": "redis",
+        "name": "ConversationMemory.append",
+        "count": 50,
+        "successes": 50,
+        "failures": 0,
+        "avg_ms": 1.114,
+        "min_ms": 0.487,
+        "max_ms": 4.061,
+        "p50_ms": 0.842,
+        "p95_ms": 2.588,
+        "p99_ms": 3.583,
+        "stddev_ms": 0.704,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {},
+        "slo": {
+          "p99_ms": 25.0,
+          "avg_ms": 5.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      },
+      {
+        "category": "redis",
+        "name": "ConversationMemory.snapshot",
+        "count": 1,
+        "successes": 1,
+        "failures": 0,
+        "avg_ms": 1.997,
+        "min_ms": 1.997,
+        "max_ms": 1.997,
+        "p50_ms": 1.997,
+        "p95_ms": 1.997,
+        "p99_ms": 1.997,
+        "stddev_ms": 0.0,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {},
+        "slo": {
+          "p99_ms": 25.0,
+          "avg_ms": 5.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      },
+      {
+        "category": "redis",
+        "name": "GET key",
+        "count": 50,
+        "successes": 50,
+        "failures": 0,
+        "avg_ms": 0.536,
+        "min_ms": 0.258,
+        "max_ms": 3.468,
+        "p50_ms": 0.373,
+        "p95_ms": 1.2,
+        "p99_ms": 2.483,
+        "stddev_ms": 0.495,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {},
+        "slo": {
+          "p99_ms": 25.0,
+          "avg_ms": 5.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      },
+      {
+        "category": "redis",
+        "name": "SET key=str",
+        "count": 50,
+        "successes": 50,
+        "failures": 0,
+        "avg_ms": 0.67,
+        "min_ms": 0.289,
+        "max_ms": 3.631,
+        "p50_ms": 0.45,
+        "p95_ms": 1.973,
+        "p99_ms": 3.022,
+        "stddev_ms": 0.616,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {},
+        "slo": {
+          "p99_ms": 25.0,
+          "avg_ms": 5.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      },
+      {
+        "category": "redis",
+        "name": "async PING",
+        "count": 50,
+        "successes": 50,
+        "failures": 0,
+        "avg_ms": 0.721,
+        "min_ms": 0.262,
+        "max_ms": 4.111,
+        "p50_ms": 0.571,
+        "p95_ms": 1.364,
+        "p99_ms": 2.858,
+        "stddev_ms": 0.576,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {},
+        "slo": {
+          "p99_ms": 25.0,
+          "avg_ms": 5.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      },
+      {
+        "category": "redis",
+        "name": "rate_limit.limit_async",
+        "count": 50,
+        "successes": 50,
+        "failures": 0,
+        "avg_ms": 0.929,
+        "min_ms": 0.311,
+        "max_ms": 4.122,
+        "p50_ms": 0.681,
+        "p95_ms": 2.329,
+        "p99_ms": 3.517,
+        "stddev_ms": 0.712,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {},
+        "slo": {
+          "p99_ms": 25.0,
+          "avg_ms": 5.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      },
+      {
+        "category": "redis",
+        "name": "sync PING",
+        "count": 50,
+        "successes": 50,
+        "failures": 0,
+        "avg_ms": 0.43,
+        "min_ms": 0.21,
+        "max_ms": 3.833,
+        "p50_ms": 0.33,
+        "p95_ms": 0.667,
+        "p99_ms": 2.491,
+        "stddev_ms": 0.511,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {},
+        "slo": {
+          "p99_ms": 25.0,
+          "avg_ms": 5.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      }
+    ],
+    "twilio": [
+      {
+        "category": "twilio",
+        "name": "build_voice_twiml",
+        "count": 30,
+        "successes": 30,
+        "failures": 0,
+        "avg_ms": 0.003,
+        "min_ms": 0.002,
+        "max_ms": 0.015,
+        "p50_ms": 0.003,
+        "p95_ms": 0.007,
+        "p99_ms": 0.014,
+        "stddev_ms": 0.003,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {},
+        "slo": {
+          "p99_ms": 2000.0,
+          "avg_ms": 800.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      },
+      {
+        "category": "twilio",
+        "name": "create_call (fake)",
+        "count": 30,
+        "successes": 30,
+        "failures": 0,
+        "avg_ms": 2.437,
+        "min_ms": 2.235,
+        "max_ms": 3.42,
+        "p50_ms": 2.31,
+        "p95_ms": 2.94,
+        "p99_ms": 3.3,
+        "stddev_ms": 0.271,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {
+          "mode": "fake"
+        },
+        "slo": {
+          "p99_ms": 2000.0,
+          "avg_ms": 800.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      },
+      {
+        "category": "twilio",
+        "name": "hangup (fake)",
+        "count": 30,
+        "successes": 30,
+        "failures": 0,
+        "avg_ms": 2.327,
+        "min_ms": 2.184,
+        "max_ms": 2.82,
+        "p50_ms": 2.296,
+        "p95_ms": 2.511,
+        "p99_ms": 2.738,
+        "stddev_ms": 0.131,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {
+          "mode": "fake"
+        },
+        "slo": {
+          "p99_ms": 2000.0,
+          "avg_ms": 800.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      }
+    ],
+    "voice_pipeline": [
+      {
+        "category": "voice_pipeline",
+        "name": "AIService.finalize_call (fake)",
+        "count": 5,
+        "successes": 5,
+        "failures": 0,
+        "avg_ms": 32.483,
+        "min_ms": 26.1,
+        "max_ms": 44.341,
+        "p50_ms": 30.311,
+        "p95_ms": 42.233,
+        "p99_ms": 43.919,
+        "stddev_ms": 6.467,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {
+          "mode": "fake"
+        },
+        "slo": {
+          "p99_ms": 6000.0,
+          "avg_ms": 2500.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      },
+      {
+        "category": "voice_pipeline",
+        "name": "stage: AIService.respond_turn",
+        "count": 10,
+        "successes": 10,
+        "failures": 0,
+        "avg_ms": 13.839,
+        "min_ms": 12.968,
+        "max_ms": 15.806,
+        "p50_ms": 13.638,
+        "p95_ms": 15.437,
+        "p99_ms": 15.732,
+        "stddev_ms": 0.881,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {
+          "mode": "fake"
+        },
+        "slo": {
+          "p99_ms": 6000.0,
+          "avg_ms": 2500.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      },
+      {
+        "category": "voice_pipeline",
+        "name": "stage: TTS TTFB",
+        "count": 10,
+        "successes": 10,
+        "failures": 0,
+        "avg_ms": 2.335,
+        "min_ms": 2.199,
+        "max_ms": 2.918,
+        "p50_ms": 2.22,
+        "p95_ms": 2.819,
+        "p99_ms": 2.899,
+        "stddev_ms": 0.242,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {
+          "mode": "fake"
+        },
+        "slo": {
+          "p99_ms": 6000.0,
+          "avg_ms": 2500.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      },
+      {
+        "category": "voice_pipeline",
+        "name": "stage: stt \u2192 FINAL",
+        "count": 10,
+        "successes": 10,
+        "failures": 0,
+        "avg_ms": 0.259,
+        "min_ms": 0.106,
+        "max_ms": 0.997,
+        "p50_ms": 0.162,
+        "p95_ms": 0.674,
+        "p99_ms": 0.932,
+        "stddev_ms": 0.252,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {
+          "mode": "fake"
+        },
+        "slo": {
+          "p99_ms": 6000.0,
+          "avg_ms": 2500.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
+        }
+      },
+      {
+        "category": "voice_pipeline",
+        "name": "stt \u2192 ai \u2192 tts (one turn, fake)",
+        "count": 10,
+        "successes": 10,
+        "failures": 0,
+        "avg_ms": 16.521,
+        "min_ms": 15.425,
+        "max_ms": 18.347,
+        "p50_ms": 16.333,
+        "p95_ms": 18.311,
+        "p99_ms": 18.34,
+        "stddev_ms": 0.962,
+        "success_rate": 1.0,
+        "failure_rate": 0.0,
+        "metadata": {
+          "mode": "fake",
+          "openai_delay_ms": 8,
+          "tts_chunk_delay_ms": 2
+        },
+        "slo": {
+          "p99_ms": 6000.0,
+          "avg_ms": 2500.0
+        },
+        "slo_breach": {
+          "p99_ms": false,
+          "avg_ms": false
         }
       }
     ]

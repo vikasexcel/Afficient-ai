@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Filter,
+  Loader2,
   MoreHorizontal,
   Phone,
   Plus,
@@ -11,6 +12,9 @@ import { toast } from "sonner";
 
 import AppLayout from "@/components/layout/AppLayout";
 import LeadUploadDialog from "@/components/leads/LeadUploadDialog";
+import LeadFormDialog from "@/components/leads/LeadFormDialog";
+import LogActivityDialog from "@/components/leads/LogActivityDialog";
+import LeadDetailsDialog from "@/components/leads/LeadDetailsDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -29,111 +33,20 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { formatApiError } from "@/lib/apiError";
+import { formatLeadApiError, listLeads, deleteLead } from "@/services/lead";
+import { initiateCall } from "@/services/telephony";
+import type { Lead, LeadStatus } from "@/types/lead";
 
-type LeadStatus = "new" | "contacted" | "qualified" | "converted" | "lost";
+// Telephony backend (Twilio + LiveKit SIP) is implemented, so calling is
+// enabled. Flip to false to fall back to a disabled "coming soon" button.
+const CALLING_ENABLED = true;
 
-type Lead = {
-  id: string;
-  name: string;
-  email: string;
-  phone: string;
-  company: string;
-  status: LeadStatus;
-  source: string;
-  owner: string;
-  lastContact: string;
-};
-
-const MOCK_LEADS: Lead[] = [
-  {
-    id: "ld_001",
-    name: "Aarav Sharma",
-    email: "aarav.sharma@northwindlabs.com",
-    phone: "+91 98201 12345",
-    company: "Northwind Labs",
-    status: "new",
-    source: "Website",
-    owner: "Unassigned",
-    lastContact: "Just added",
-  },
-  {
-    id: "ld_002",
-    name: "Priya Iyer",
-    email: "priya@brightpath.io",
-    phone: "+91 99876 54211",
-    company: "Brightpath",
-    status: "contacted",
-    source: "Outbound",
-    owner: "Riya M.",
-    lastContact: "2 hours ago",
-  },
-  {
-    id: "ld_003",
-    name: "Daniel Cohen",
-    email: "dan@helio-energy.com",
-    phone: "+1 415 555 0188",
-    company: "Helio Energy",
-    status: "qualified",
-    source: "Referral",
-    owner: "Karan S.",
-    lastContact: "Yesterday",
-  },
-  {
-    id: "ld_004",
-    name: "Mei Tanaka",
-    email: "mei.tanaka@orbitfin.co",
-    phone: "+81 80 4422 7711",
-    company: "OrbitFin",
-    status: "converted",
-    source: "Campaign · Q2 SaaS",
-    owner: "Aditi R.",
-    lastContact: "3 days ago",
-  },
-  {
-    id: "ld_005",
-    name: "Lucas Ferreira",
-    email: "lucas@viacore.br",
-    phone: "+55 11 99888 4422",
-    company: "Viacore",
-    status: "lost",
-    source: "Inbound chat",
-    owner: "Karan S.",
-    lastContact: "1 week ago",
-  },
-  {
-    id: "ld_006",
-    name: "Hannah Müller",
-    email: "h.muller@helvio.de",
-    phone: "+49 151 4422 1188",
-    company: "Helvio",
-    status: "contacted",
-    source: "LinkedIn",
-    owner: "Riya M.",
-    lastContact: "4 hours ago",
-  },
-  {
-    id: "ld_007",
-    name: "Omar Haddad",
-    email: "omar@levantretail.com",
-    phone: "+971 50 991 4422",
-    company: "Levant Retail",
-    status: "new",
-    source: "Website",
-    owner: "Unassigned",
-    lastContact: "Today",
-  },
-  {
-    id: "ld_008",
-    name: "Sofia Castillo",
-    email: "sofia@montepay.mx",
-    phone: "+52 55 8814 7720",
-    company: "Montepay",
-    status: "qualified",
-    source: "Campaign · LATAM",
-    owner: "Aditi R.",
-    lastContact: "2 days ago",
-  },
-];
+/** Best-effort conversion of a stored phone to E.164 for the call API. */
+function toE164(phone: string): string {
+  const digits = (phone ?? "").replace(/\D/g, "");
+  return `+${digits}`;
+}
 
 const STATUS_FILTERS: { id: LeadStatus | "all"; label: string }[] = [
   { id: "all", label: "All" },
@@ -147,32 +60,115 @@ const STATUS_FILTERS: { id: LeadStatus | "all"; label: string }[] = [
 export default function Leads() {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<LeadStatus | "all">("all");
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // Modal coordination. Only one dialog is shown at a time.
+  const [formState, setFormState] = useState<
+    { mode: "add" } | { mode: "edit"; lead: Lead } | null
+  >(null);
+  const [activityLead, setActivityLead] = useState<Lead | null>(null);
+  const [detailsLead, setDetailsLead] = useState<Lead | null>(null);
+  const [detailsRefresh, setDetailsRefresh] = useState(0);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { leads } = await listLeads({ limit: 1000 });
+      setLeads(leads);
+    } catch (err) {
+      toast.error(formatLeadApiError(err, "Failed to load leads"));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return MOCK_LEADS.filter((lead) => {
+    return leads.filter((lead) => {
       if (status !== "all" && lead.status !== status) return false;
       if (!q) return true;
-      return (
-        lead.name.toLowerCase().includes(q) ||
-        lead.email.toLowerCase().includes(q) ||
-        lead.company.toLowerCase().includes(q) ||
-        lead.phone.includes(q)
-      );
+      // Case-insensitive partial match across every meaningful field so
+      // "Sof" → "Software" (industry) and "754" → phone both resolve.
+      const haystack = [
+        lead.name,
+        lead.email ?? "",
+        lead.phone,
+        lead.company ?? "",
+        lead.industry ?? "",
+        ...(lead.tags ?? []),
+      ]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(q);
     });
-  }, [query, status]);
+  }, [query, status, leads]);
 
   const counts = useMemo(() => {
-    const total = MOCK_LEADS.length;
     const byStatus = (s: LeadStatus) =>
-      MOCK_LEADS.filter((l) => l.status === s).length;
+      leads.filter((l) => l.status === s).length;
     return {
-      total,
+      total: leads.length,
       new: byStatus("new"),
       qualified: byStatus("qualified"),
       contacted: byStatus("contacted"),
     };
-  }, []);
+  }, [leads]);
+
+  async function handleDelete(lead: Lead) {
+    try {
+      await deleteLead(lead.id);
+      toast.success(`Deleted ${lead.name}`);
+      await refresh();
+    } catch (err) {
+      toast.error(formatLeadApiError(err, "Delete failed"));
+    }
+  }
+
+  async function handleStartCall(lead: Lead) {
+    if (!CALLING_ENABLED) {
+      toast.message("Calling functionality coming soon");
+      return;
+    }
+    const toastId = toast.loading(`Calling ${lead.name}…`);
+    try {
+      await initiateCall({
+        to_number: toE164(lead.phone),
+        lead_id: lead.id,
+        lead_name: lead.name,
+        lead_phone: toE164(lead.phone),
+      });
+      toast.success(`Call started to ${lead.name}`, { id: toastId });
+    } catch (err) {
+      const status = (err as { response?: { status?: number } })?.response
+        ?.status;
+      if (status === 404 || status === 405) {
+        toast.message("Calling functionality coming soon", { id: toastId });
+        return;
+      }
+      toast.error(formatApiError(err, "Could not start the call"), {
+        id: toastId,
+      });
+    }
+  }
+
+  function openDetails(lead: Lead) {
+    setDetailsLead(lead);
+  }
+
+  function openEdit(lead: Lead) {
+    setDetailsLead(null);
+    setActivityLead(null);
+    setFormState({ mode: "edit", lead });
+  }
+
+  function openLogActivity(lead: Lead) {
+    setActivityLead(lead);
+  }
 
   return (
     <AppLayout>
@@ -181,22 +177,23 @@ export default function Leads() {
           <div className="min-w-0">
             <h1 className="text-xl sm:text-2xl font-medium text-white">Leads</h1>
             <p className="text-[13px] text-white/40 mt-1">
-              Manage prospects and pipeline activity. Backend wiring coming soon.
+              Manage prospects and pipeline activity.
             </p>
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
             <LeadUploadDialog
-              onImported={(res) =>
+              onImported={(res) => {
                 toast.success(
                   `${res.inserted.toLocaleString()} lead${res.inserted === 1 ? "" : "s"} added to "${res.lead_list.name}"`
-                )
-              }
+                );
+                void refresh();
+              }}
             />
             <Button
               size="sm"
               className="bg-violet-600 hover:bg-violet-500 text-white"
-              onClick={() => toast.message("Add lead will be available soon")}
+              onClick={() => setFormState({ mode: "add" })}
             >
               <Plus size={13} />
               Add lead
@@ -271,7 +268,12 @@ export default function Leads() {
             </div>
           </div>
 
-          {filtered.length === 0 ? (
+          {loading ? (
+            <div className="py-16 flex items-center justify-center text-white/45">
+              <Loader2 size={16} className="animate-spin mr-2" />
+              Loading leads…
+            </div>
+          ) : filtered.length === 0 ? (
             <EmptyState query={query} />
           ) : (
             <Table>
@@ -290,10 +292,10 @@ export default function Leads() {
                     Source
                   </TableHead>
                   <TableHead className="text-white/40 font-medium text-[11px] uppercase tracking-wider">
-                    Owner
+                    Industry
                   </TableHead>
                   <TableHead className="text-white/40 font-medium text-[11px] uppercase tracking-wider">
-                    Last contact
+                    Added
                   </TableHead>
                   <TableHead className="w-12" />
                 </TableRow>
@@ -313,7 +315,7 @@ export default function Leads() {
                             {lead.name}
                           </div>
                           <div className="text-[11px] text-white/40 truncate">
-                            {lead.company}
+                            {lead.company ?? "—"}
                           </div>
                         </div>
                       </div>
@@ -321,7 +323,7 @@ export default function Leads() {
 
                     <TableCell className="py-2.5">
                       <div className="text-[12px] text-white/80 truncate">
-                        {lead.email}
+                        {lead.email ?? "—"}
                       </div>
                       <div className="text-[11px] text-white/40 flex items-center gap-1 mt-0.5">
                         <Phone size={10} />
@@ -334,15 +336,17 @@ export default function Leads() {
                     </TableCell>
 
                     <TableCell className="py-2.5 text-[12px] text-white/70">
-                      {lead.source}
+                      {lead.source ?? "—"}
                     </TableCell>
 
                     <TableCell className="py-2.5 text-[12px] text-white/70">
-                      {lead.owner}
+                      {lead.industry ?? "—"}
                     </TableCell>
 
                     <TableCell className="py-2.5 text-[12px] text-white/55">
-                      {lead.lastContact}
+                      {lead.created_at
+                        ? new Date(lead.created_at).toLocaleDateString()
+                        : "—"}
                     </TableCell>
 
                     <TableCell className="py-2.5">
@@ -361,32 +365,30 @@ export default function Leads() {
                           className="w-44 bg-[#111114] border-white/[0.08]"
                         >
                           <DropdownMenuItem
-                            onSelect={() =>
-                              toast.message(`Opening ${lead.name}`)
-                            }
+                            onSelect={() => openDetails(lead)}
                           >
                             View details
                           </DropdownMenuItem>
                           <DropdownMenuItem
-                            onSelect={() =>
-                              toast.message(`Calling ${lead.name}`)
-                            }
+                            onSelect={() => openEdit(lead)}
+                          >
+                            Edit
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            disabled={!CALLING_ENABLED}
+                            onSelect={() => void handleStartCall(lead)}
                           >
                             Start call
                           </DropdownMenuItem>
                           <DropdownMenuItem
-                            onSelect={() =>
-                              toast.message(`Logging activity for ${lead.name}`)
-                            }
+                            onSelect={() => openLogActivity(lead)}
                           >
                             Log activity
                           </DropdownMenuItem>
                           <DropdownMenuSeparator className="bg-white/[0.06]" />
                           <DropdownMenuItem
                             className="text-red-400 focus:text-red-300"
-                            onSelect={() =>
-                              toast.error("Delete will be available soon")
-                            }
+                            onSelect={() => void handleDelete(lead)}
                           >
                             Delete
                           </DropdownMenuItem>
@@ -400,6 +402,41 @@ export default function Leads() {
           )}
         </div>
       </div>
+
+      <LeadFormDialog
+        open={formState !== null}
+        onOpenChange={(o) => {
+          if (!o) setFormState(null);
+        }}
+        lead={formState?.mode === "edit" ? formState.lead : null}
+        onSaved={(saved) => {
+          void refresh();
+          // Keep an open details view in sync after an edit.
+          setDetailsLead((cur) => (cur && cur.id === saved.id ? saved : cur));
+        }}
+      />
+
+      <LogActivityDialog
+        open={activityLead !== null}
+        onOpenChange={(o) => {
+          if (!o) setActivityLead(null);
+        }}
+        lead={activityLead}
+        onLogged={() => setDetailsRefresh((n) => n + 1)}
+      />
+
+      <LeadDetailsDialog
+        open={detailsLead !== null}
+        onOpenChange={(o) => {
+          if (!o) setDetailsLead(null);
+        }}
+        lead={detailsLead}
+        refreshKey={detailsRefresh}
+        callDisabled={!CALLING_ENABLED}
+        onEdit={openEdit}
+        onLogActivity={openLogActivity}
+        onStartCall={(lead) => void handleStartCall(lead)}
+      />
     </AppLayout>
   );
 }

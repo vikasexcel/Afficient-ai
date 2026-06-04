@@ -170,6 +170,64 @@ class Settings(BaseSettings):
     # Outbound caller-ID name shown on supported carriers.
     TWILIO_CALLER_ID_NAME: str = "Aifficient"
 
+    # ------------------------------------------------------------------
+    # Answering Machine Detection (AMD) + Voicemail Drop
+    # ------------------------------------------------------------------
+    # Master switch — when False the telephony layer never asks Twilio to
+    # run AMD even if a campaign requests voicemail handling.
+    TWILIO_AMD_ENABLED: bool = True
+    # Twilio ``machine_detection`` mode: "Enable" (detect human vs machine)
+    # or "DetectMessageEnd" (also wait for the greeting/beep to finish, which
+    # is what you want before dropping a voicemail).
+    TWILIO_AMD_MODE: str = "DetectMessageEnd"
+    # Max seconds Twilio waits to classify the answer (3..59).
+    TWILIO_AMD_TIMEOUT_SECONDS: int = 30
+    # Voicemail recording upload + validation.
+    # Directory uploaded voicemail audio is written to (local FS until the
+    # S3 integration lands — see deliverable notes).
+    VOICEMAIL_UPLOAD_DIR: str = "uploads/voicemail"
+    # Max upload size in bytes (default 5 MB).
+    VOICEMAIL_MAX_BYTES: int = 5 * 1024 * 1024
+    # Allowed audio content-types / extensions for uploads + configured URLs.
+    VOICEMAIL_ALLOWED_FORMATS: str = "mp3,wav,x-wav,wave,ogg,mpeg,aac"
+    # When True, configuring a voicemail by URL performs a best-effort network
+    # HEAD request to confirm the URL is reachable + audio. Off by default so
+    # CI / offline environments don't depend on the network.
+    VOICEMAIL_URL_NETWORK_CHECK: bool = False
+    # When True, reject voicemail URLs that Twilio cannot fetch over the public
+    # internet (file://, localhost, loopback / private / link-local IPs,
+    # ``*.local``). Twilio ``<Play>`` runs from Twilio's cloud, so a recording
+    # behind a private address will silently fail to play. Disable only in
+    # isolated dev where Twilio is mocked.
+    VOICEMAIL_REQUIRE_PUBLIC_URL: bool = True
+    # Public HTTP route uploaded recordings are served from (mounted onto
+    # ``VOICEMAIL_UPLOAD_DIR``). The Twilio-reachable URL is
+    # ``{TWILIO_PUBLIC_BASE_URL}{VOICEMAIL_PUBLIC_ROUTE}/{filename}``.
+    VOICEMAIL_PUBLIC_ROUTE: str = "/media/voicemail"
+
+    # When True, the campaign execution worker places a real outbound
+    # telephony call (Twilio + AMD + voicemail drop) per lead instead of the
+    # legacy LLM-plan stub. The terminal call outcome is reconciled back onto
+    # the execution via the Twilio status webhook. Off by default so existing
+    # deployments/tests keep the in-process plan behaviour until telephony is
+    # provisioned.
+    CAMPAIGN_TELEPHONY_DIALING_ENABLED: bool = False
+
+    # ------------------------------------------------------------------
+    # Campaign call-scheduling engine (Celery Beat + pacing)
+    # ------------------------------------------------------------------
+    # Broker / result backend for Celery. Both fall back to ``REDIS_URL``
+    # when unset so a single Redis instance powers memory, rate limiting
+    # and the task queue in development.
+    CELERY_BROKER_URL: str | None = None
+    CELERY_RESULT_BACKEND: str | None = None
+    # How often Celery Beat fires the campaign scheduler tick (seconds).
+    CAMPAIGN_SCHEDULER_INTERVAL_SECONDS: float = 60.0
+    # Default pacing applied when a campaign doesn't set its own. ``0`` on
+    # either field means "unlimited" for that constraint.
+    CAMPAIGN_DEFAULT_CALLS_PER_HOUR: int = 60
+    CAMPAIGN_DEFAULT_MAX_CONCURRENT_CALLS: int = 5
+
     # Logging
     LOG_LEVEL: str = "INFO"
     LOG_JSON: bool = False

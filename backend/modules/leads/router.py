@@ -14,11 +14,16 @@ from modules.auth.tenant import get_current_tenant
 from modules.leads.schema import (
     CommitUploadInput,
     CommitUploadResponse,
+    CreateLeadActivityInput,
+    CreateLeadInput,
     CreateLeadListInput,
+    LeadActivityListResponse,
+    LeadActivityOut,
     LeadListLeadsResponse,
     LeadListOut,
     LeadListResponse,
     LeadOut,
+    UpdateLeadInput,
     UploadPreviewResponse,
 )
 from modules.leads.service import LeadsService
@@ -75,6 +80,7 @@ def create_lead_list(
 @router.get("", response_model=LeadListLeadsResponse)
 def list_leads(
     lead_list_id: uuid.UUID | None = Query(default=None),
+    search: str | None = Query(default=None, max_length=255),
     limit: int = Query(default=200, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -84,6 +90,7 @@ def list_leads(
         db,
         _org_id(tenant),
         lead_list_id=lead_list_id,
+        search=search,
         limit=limit,
         offset=offset,
     )
@@ -93,20 +100,18 @@ def list_leads(
     )
 
 
-@router.delete("/{lead_id}", status_code=204)
-def delete_lead(
-    lead_id: uuid.UUID,
+@router.post("", response_model=LeadOut, status_code=201)
+def create_lead(
+    data: CreateLeadInput,
     db: Session = Depends(get_db),
     tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
 ):
-    LeadsService.delete_lead(db, _org_id(tenant), lead_id)
+    lead = LeadsService.create_lead(db, _org_id(tenant), data)
+    return LeadOut.model_validate(lead)
 
 
-# ---------------------------------------------------------------------------
-# CSV upload
-# ---------------------------------------------------------------------------
-
-
+# Static upload paths must be registered before ``/{lead_id}`` so they are
+# never mistaken for a UUID path segment on older Starlette versions.
 @router.post("/upload/preview", response_model=UploadPreviewResponse)
 async def upload_preview(
     file: UploadFile = File(..., description="CSV file with header row"),
@@ -137,3 +142,74 @@ def upload_commit(
         skipped_duplicates=result["skipped_duplicates"],
         lead_list=LeadListOut.model_validate(result["lead_list"]),
     )
+
+
+@router.get("/{lead_id}", response_model=LeadOut)
+def get_lead(
+    lead_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    tenant=Depends(get_current_tenant),
+):
+    lead = LeadsService.get_lead(db, _org_id(tenant), lead_id)
+    return LeadOut.model_validate(lead)
+
+
+@router.patch("/{lead_id}", response_model=LeadOut)
+def update_lead(
+    lead_id: uuid.UUID,
+    data: UpdateLeadInput,
+    db: Session = Depends(get_db),
+    tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
+):
+    lead = LeadsService.update_lead(db, _org_id(tenant), lead_id, data)
+    return LeadOut.model_validate(lead)
+
+
+@router.delete("/{lead_id}", status_code=204)
+def delete_lead(
+    lead_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
+):
+    LeadsService.delete_lead(db, _org_id(tenant), lead_id)
+
+
+# ---------------------------------------------------------------------------
+# Lead activities
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/{lead_id}/activities", response_model=LeadActivityListResponse
+)
+def list_lead_activities(
+    lead_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    tenant=Depends(get_current_tenant),
+):
+    rows = LeadsService.list_activities(db, _org_id(tenant), lead_id)
+    return LeadActivityListResponse(
+        activities=[LeadActivityOut.model_validate(r) for r in rows]
+    )
+
+
+@router.post(
+    "/{lead_id}/activities",
+    response_model=LeadActivityOut,
+    status_code=201,
+)
+def log_lead_activity(
+    lead_id: uuid.UUID,
+    data: CreateLeadActivityInput,
+    db: Session = Depends(get_db),
+    tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
+):
+    activity = LeadsService.log_activity(
+        db,
+        _org_id(tenant),
+        _user_id(tenant),
+        lead_id,
+        activity_type=data.activity_type,
+        notes=data.notes,
+    )
+    return LeadActivityOut.model_validate(activity)

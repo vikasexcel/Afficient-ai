@@ -56,6 +56,12 @@ class InitiateCallRequest(BaseModel):
     dial_timeout_seconds: int | None = Field(default=None, ge=5, le=120)
     answering_machine_detection: bool = False
 
+    # AMD / Voicemail drop. When omitted these are inherited from the linked
+    # campaign's voicemail_config (if any).
+    voicemail_enabled: bool | None = None
+    voicemail_message_url: str | None = Field(default=None, max_length=2000)
+    amd_unknown_fallback: str | None = Field(default=None, max_length=16)
+
     # Pre-populate this if the caller wants to reuse a known room name.
     room_name: str | None = Field(default=None, max_length=128)
 
@@ -107,6 +113,13 @@ class CallResponse(BaseModel):
     error_code: str | None = None
     error_message: str | None = None
     retry_count: int = 0
+    # AMD / voicemail drop result.
+    amd_result: str | None = None
+    amd_confidence: float | None = None
+    voicemail_detected_at: datetime | None = None
+    voicemail_dropped: bool = False
+    voicemail_dropped_at: datetime | None = None
+    voicemail_recording_url: str | None = None
     extra: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime

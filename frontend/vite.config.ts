@@ -20,7 +20,8 @@ export default defineConfig({
     // Route API calls to the local uvicorn backend regardless of browser host.
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8000',
+        // Must match the uvicorn port (see backend scripts / e2e defaults).
+        target: process.env.VITE_API_PROXY_TARGET ?? 'http://127.0.0.1:8001',
         changeOrigin: true,
       },
     },

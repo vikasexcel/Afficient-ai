@@ -1,11 +1,18 @@
 import { api } from "./auth";
+import { formatApiError } from "@/lib/apiError";
 import type {
+  ActivityType,
   CommitUploadPayload,
   CommitUploadResult,
+  CreateLeadInput,
   Lead,
+  LeadActivity,
   LeadList,
+  UpdateLeadInput,
   UploadPreview,
 } from "@/types/lead";
+
+export { formatApiError as formatLeadApiError };
 
 /* -------------------------------------------------------------------------- */
 /* Lead lists                                                                 */
@@ -31,6 +38,7 @@ export async function createLeadList(input: {
 
 export async function listLeads(params?: {
   lead_list_id?: string;
+  search?: string;
   limit?: number;
   offset?: number;
 }): Promise<{ leads: Lead[]; total: number }> {
@@ -40,8 +48,54 @@ export async function listLeads(params?: {
   return res.data;
 }
 
+/** Fetch a single lead by id (`GET /leads/{id}`). */
+export async function getLead(leadId: string): Promise<Lead> {
+  const res = await api.get<Lead>(`/leads/${encodeURIComponent(leadId)}`);
+  return res.data;
+}
+
+export async function createLead(input: CreateLeadInput): Promise<Lead> {
+  const res = await api.post<Lead>("/leads", input);
+  return res.data;
+}
+
+export async function updateLead(
+  leadId: string,
+  input: UpdateLeadInput
+): Promise<Lead> {
+  const res = await api.patch<Lead>(
+    `/leads/${encodeURIComponent(leadId)}`,
+    input
+  );
+  return res.data;
+}
+
 export async function deleteLead(leadId: string): Promise<void> {
-  await api.delete(`/leads/${leadId}`);
+  await api.delete(`/leads/${encodeURIComponent(leadId)}`);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Lead activities                                                            */
+/* -------------------------------------------------------------------------- */
+
+export async function listLeadActivities(
+  leadId: string
+): Promise<LeadActivity[]> {
+  const res = await api.get<{ activities: LeadActivity[] }>(
+    `/leads/${encodeURIComponent(leadId)}/activities`
+  );
+  return res.data.activities;
+}
+
+export async function logLeadActivity(
+  leadId: string,
+  input: { activity_type: ActivityType; notes?: string | null }
+): Promise<LeadActivity> {
+  const res = await api.post<LeadActivity>(
+    `/leads/${encodeURIComponent(leadId)}/activities`,
+    input
+  );
+  return res.data;
 }
 
 /* -------------------------------------------------------------------------- */

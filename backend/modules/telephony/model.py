@@ -22,7 +22,9 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -153,6 +155,37 @@ class TelephonyCall(BaseModel):
     parent_call_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("telephony_calls.id"),
         nullable=True,
+    )
+
+    # ----------------------------------------------------------------- #
+    # Answering Machine Detection (AMD) + Voicemail Drop bookkeeping.
+    # ``amd_result`` is the canonical, provider-agnostic classification
+    # (``human`` | ``voicemail`` | ``unknown``) produced by
+    # :mod:`modules.telephony.amd`; ``amd_confidence`` is a 0..1 score when
+    # the provider supplies one. The ``voicemail_*`` columns track whether a
+    # configured pre-recorded message was played into the detected voicemail
+    # and when, plus the recording URL that was used.
+    # ----------------------------------------------------------------- #
+    amd_result: Mapped[str | None] = mapped_column(
+        String(20), nullable=True, index=True
+    )
+    amd_confidence: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
+    voicemail_detected_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+    voicemail_dropped: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="false",
+        nullable=False,
+    )
+    voicemail_dropped_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+    voicemail_recording_url: Mapped[str | None] = mapped_column(
+        Text, nullable=True
     )
 
     # Free-form bag — used for opening_line, persona, extra_context,

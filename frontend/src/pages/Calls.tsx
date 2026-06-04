@@ -14,6 +14,7 @@ import {
   RefreshCw,
   Send,
   Sparkles,
+  Trash2,
   User,
   Waves,
   X,
@@ -22,6 +23,16 @@ import {
 import AppLayout from "@/components/layout/AppLayout";
 import { microphoneUnavailableReason } from "@/lib/media";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useMe } from "@/store/me";
 import { useLiveKit, type ParticipantInfo } from "@/store/livekit";
 import { useAI, type ChatBubble } from "@/store/ai";
@@ -33,12 +44,15 @@ import {
 } from "@/services/playbook";
 import { previewOpeningLine } from "@/lib/playbookCompany";
 import { personaLabel } from "@/lib/playbookCopy";
+import { describeCall, friendlyActionError } from "@/lib/callError";
 import { useActivePlaybooks } from "@/hooks/useActivePlaybooks";
 import {
   cancelCall,
+  deleteCall,
   initiateCall,
   listCalls,
   retryCall,
+  type AnswerType,
   type TelephonyCall,
 } from "@/services/telephony";
 
@@ -682,17 +696,18 @@ function PhoneDialerSection({
   const [calls, setCalls] = useState<TelephonyCall[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
+  const [answerFilter, setAnswerFilter] = useState<AnswerType | "all">("all");
 
   async function refresh() {
     setLoading(true);
     try {
-      const data = await listCalls({ limit: 20 });
+      const data = await listCalls({
+        limit: 20,
+        answered_by: answerFilter === "all" ? undefined : answerFilter,
+      });
       setCalls(data);
     } catch (err) {
-      const detail =
-        (err as { response?: { data?: { detail?: string } } })?.response?.data
-          ?.detail || (err as Error)?.message || "Failed to load calls";
-      toast.error(detail);
+      toast.error(friendlyActionError(err, "Failed to load calls."));
     } finally {
       setLoading(false);
     }
@@ -700,7 +715,8 @@ function PhoneDialerSection({
 
   useEffect(() => {
     refresh();
-  }, [refreshTick]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshTick, answerFilter]);
 
   // Poll while any call is in a non-terminal state.
   useEffect(() => {
@@ -716,24 +732,40 @@ function PhoneDialerSection({
     return () => clearInterval(id);
   }, [calls]);
 
+  // Remove a deleted call from the list immediately (optimistic), so the
+  // card disappears without waiting for the next refetch.
+  function removeLocally(callId: string) {
+    setCalls((prev) => prev.filter((c) => c.id !== callId));
+  }
+
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[380px_minmax(0,1fr)] xl:grid-cols-[420px_minmax(0,1fr)] gap-5 items-start">
-      <DialerForm
-        playbooks={playbooks}
-        playbooksLoading={playbooksLoading}
-        defaultPlaybookId={defaultPlaybookId}
-        onPlaybookChange={onPlaybookChange}
-        onRefreshPlaybooks={onRefreshPlaybooks}
-        onPlaced={() => {
-          setRefreshTick((t) => t + 1);
-          onRefreshPlaybooks();
-        }}
-      />
-      <RecentPhoneCalls
-        calls={calls}
-        loading={loading}
-        onRefresh={() => setRefreshTick((t) => t + 1)}
-      />
+    // Parent is height-constrained and clips overflow so neither column can
+    // push the page; each column scrolls on its own (lg+). On mobile the
+    // columns stack and scroll with the page as usual.
+    <div className="grid grid-cols-1 lg:grid-cols-[380px_minmax(0,1fr)] xl:grid-cols-[420px_minmax(0,1fr)] gap-5 items-stretch lg:h-[calc(100vh-13rem)] lg:overflow-hidden">
+      <div className="lg:h-full lg:overflow-y-auto lg:pr-1">
+        <DialerForm
+          playbooks={playbooks}
+          playbooksLoading={playbooksLoading}
+          defaultPlaybookId={defaultPlaybookId}
+          onPlaybookChange={onPlaybookChange}
+          onRefreshPlaybooks={onRefreshPlaybooks}
+          onPlaced={() => {
+            setRefreshTick((t) => t + 1);
+            onRefreshPlaybooks();
+          }}
+        />
+      </div>
+      <div className="min-h-0 lg:h-full">
+        <RecentPhoneCalls
+          calls={calls}
+          loading={loading}
+          answerFilter={answerFilter}
+          onAnswerFilterChange={setAnswerFilter}
+          onRefresh={() => setRefreshTick((t) => t + 1)}
+          onDeleted={removeLocally}
+        />
+      </div>
     </div>
   );
 }
@@ -840,10 +872,7 @@ function DialerForm({
       setToNumber("");
       setLeadName("");
     } catch (err) {
-      const detail =
-        (err as { response?: { data?: { detail?: string } } })?.response?.data
-          ?.detail || (err as Error)?.message || "Failed to dial";
-      toast.error(detail);
+      toast.error(friendlyActionError(err, "Could not place the call."));
     } finally {
       setDialing(false);
     }
@@ -1028,15 +1057,27 @@ function DialerForm({
 function RecentPhoneCalls({
   calls,
   loading,
+  answerFilter,
+  onAnswerFilterChange,
   onRefresh,
+  onDeleted,
 }: {
   calls: TelephonyCall[];
   loading: boolean;
+  answerFilter: AnswerType | "all";
+  onAnswerFilterChange: (v: AnswerType | "all") => void;
   onRefresh: () => void;
+  onDeleted: (callId: string) => void;
 }) {
+  const filters: { id: AnswerType | "all"; label: string }[] = [
+    { id: "all", label: "All" },
+    { id: "human", label: "Human" },
+    { id: "voicemail", label: "Voicemail" },
+    { id: "unknown", label: "Unknown" },
+  ];
   return (
-    <div className="rounded-[12px] border border-white/[0.07] bg-white/[0.03] flex flex-col">
-      <div className="px-4 py-3 border-b border-white/[0.05] flex items-center justify-between">
+    <div className="rounded-[12px] border border-white/[0.07] bg-white/[0.03] flex flex-col h-full max-h-full overflow-hidden">
+      <div className="px-4 py-3 border-b border-white/[0.05] flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2">
           <span className="inline-flex items-center justify-center w-7 h-7 rounded-[7px] bg-violet-500/15 text-violet-300">
             <Phone size={13} />
@@ -1062,14 +1103,37 @@ function RecentPhoneCalls({
         </Button>
       </div>
 
+      {/* Answer-type filter (AMD): Human / Voicemail / Unknown */}
+      <div className="px-4 py-2 border-b border-white/[0.05] flex items-center gap-1.5 shrink-0 overflow-x-auto">
+        {filters.map((f) => (
+          <button
+            key={f.id}
+            type="button"
+            onClick={() => onAnswerFilterChange(f.id)}
+            className={`px-2.5 py-1 text-[11px] font-medium rounded-full transition-colors whitespace-nowrap ${
+              answerFilter === f.id
+                ? "bg-violet-500/20 text-violet-200"
+                : "bg-white/[0.03] text-white/50 hover:text-white/80"
+            }`}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
       {calls.length === 0 ? (
         <div className="px-4 py-10 text-center text-[12px] text-white/40">
           {loading ? "Loading…" : "No calls yet. Dial one to see it here."}
         </div>
       ) : (
-        <ul className="divide-y divide-white/[0.05]">
+        <ul className="divide-y divide-white/[0.05] overflow-y-auto flex-1 min-h-0">
           {calls.map((c) => (
-            <CallRow key={c.id} call={c} onChanged={onRefresh} />
+            <CallRow
+              key={c.id}
+              call={c}
+              onChanged={onRefresh}
+              onDeleted={onDeleted}
+            />
           ))}
         </ul>
       )}
@@ -1080,14 +1144,19 @@ function RecentPhoneCalls({
 function CallRow({
   call,
   onChanged,
+  onDeleted,
 }: {
   call: TelephonyCall;
   onChanged: () => void;
+  onDeleted: (callId: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const terminal = ["completed", "failed", "busy", "no-answer", "canceled"].includes(
     call.status
   );
+
+  const friendly = describeCall(call);
 
   async function handleCancel() {
     setBusy(true);
@@ -1096,10 +1165,7 @@ function CallRow({
       toast.message("Call canceled");
       onChanged();
     } catch (err) {
-      const detail =
-        (err as { response?: { data?: { detail?: string } } })?.response?.data
-          ?.detail || (err as Error)?.message || "Cancel failed";
-      toast.error(detail);
+      toast.error(friendlyActionError(err, "Could not cancel the call."));
     } finally {
       setBusy(false);
     }
@@ -1109,37 +1175,74 @@ function CallRow({
     setBusy(true);
     try {
       const r = await retryCall(call.id);
-      toast.success(`Retry placed — new sid ${r.new_call.call_sid ?? "(pending)"}`);
+      toast.success(
+        `Retry placed — new sid ${r.new_call.call_sid ?? "(pending)"}`
+      );
       onChanged();
     } catch (err) {
-      const detail =
-        (err as { response?: { data?: { detail?: string } } })?.response?.data
-          ?.detail || (err as Error)?.message || "Retry failed";
-      toast.error(detail);
+      toast.error(friendlyActionError(err, "Could not retry the call."));
     } finally {
       setBusy(false);
     }
   }
 
+  async function handleDelete() {
+    setBusy(true);
+    try {
+      await deleteCall(call.id);
+      onDeleted(call.id); // remove from the list immediately
+      toast.success("Call record deleted");
+    } catch (err) {
+      toast.error(
+        friendlyActionError(err, "Could not delete the call record.")
+      );
+      // Re-sync in case the optimistic assumption was wrong.
+      onChanged();
+    } finally {
+      setBusy(false);
+      setConfirmOpen(false);
+    }
+  }
+
   return (
     <li className="px-4 py-3">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <div className="min-w-0">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+        <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-white">
-            <span className="font-mono">{call.to_number}</span>
+            <span className="font-mono truncate max-w-[12rem]">
+              {call.to_number}
+            </span>
             {call.lead_name && (
-              <span className="text-white/45">· {call.lead_name}</span>
+              <span className="text-white/45 truncate max-w-[10rem]">
+                · {call.lead_name}
+              </span>
             )}
-            <StatusPill status={call.status} />
+            <StatusPill call={call} />
+            <AnswerTypePill call={call} />
             {call.direction === "inbound" && (
               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-sky-500/15 text-sky-300">
                 inbound
               </span>
             )}
           </div>
-          <div className="text-[11px] text-white/35 mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
-            <span>room {call.room_name}</span>
-            {call.call_sid && <span>sid {call.call_sid.slice(0, 14)}…</span>}
+
+          {/* Friendly failure reason — wraps cleanly for long messages. */}
+          {friendly.reason && (
+            <div className="mt-1.5 text-[12px] text-white/70 leading-snug break-words">
+              <span className="text-white/40">Reason: </span>
+              {friendly.reason}
+            </div>
+          )}
+
+          <div className="text-[11px] text-white/35 mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5">
+            <span className="truncate max-w-[14rem]" title={call.room_name}>
+              room {call.room_name}
+            </span>
+            {call.call_sid && (
+              <span title={call.call_sid}>
+                sid {call.call_sid.slice(0, 10)}…
+              </span>
+            )}
             {call.duration_seconds != null && (
               <span>{call.duration_seconds}s</span>
             )}
@@ -1148,12 +1251,16 @@ function CallRow({
                 {call.price} {call.price_unit}
               </span>
             )}
-            {call.error_code && (
-              <span className="text-red-300">
-                error {call.error_code}: {call.error_message}
+            {call.retry_count > 0 && <span>retry #{call.retry_count}</span>}
+            {/* Raw technical detail kept available via tooltip only. */}
+            {friendly.rawDetail && (
+              <span
+                className="text-white/30 truncate max-w-[14rem] cursor-help"
+                title={friendly.rawDetail}
+              >
+                details
               </span>
             )}
-            {call.retry_count > 0 && <span>retry #{call.retry_count}</span>}
           </div>
         </div>
 
@@ -1169,10 +1276,7 @@ function CallRow({
               Cancel
             </Button>
           )}
-          {(call.status === "failed" ||
-            call.status === "busy" ||
-            call.status === "no-answer" ||
-            call.status === "canceled") && (
+          {friendly.canRetry && (
             <Button
               variant="outline"
               size="sm"
@@ -1184,29 +1288,98 @@ function CallRow({
               Retry
             </Button>
           )}
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={busy}
+            onClick={() => setConfirmOpen(true)}
+            aria-label="Delete call record"
+            className="text-white/45 hover:text-red-300 hover:bg-red-500/[0.08]"
+          >
+            <Trash2 size={12} />
+            Delete
+          </Button>
         </div>
       </div>
+
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent className="bg-[#111114] border border-white/[0.08]">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-white">
+              Delete this call record?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-white/55">
+              Are you sure you want to delete this call record? This removes the
+              call and its history and cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              disabled={busy}
+              className="border-white/[0.1] bg-white/[0.02] text-white/80 hover:bg-white/[0.06]"
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={busy}
+              onClick={(e) => {
+                e.preventDefault();
+                void handleDelete();
+              }}
+            >
+              {busy ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </li>
   );
 }
 
-function StatusPill({ status }: { status: TelephonyCall["status"] }) {
-  const tone: Record<TelephonyCall["status"], string> = {
-    queued: "bg-white/[0.06] text-white/60",
-    initiated: "bg-sky-500/15 text-sky-300",
-    ringing: "bg-amber-500/15 text-amber-300",
-    "in-progress": "bg-emerald-500/15 text-emerald-300",
-    completed: "bg-emerald-500/20 text-emerald-200",
-    failed: "bg-red-500/15 text-red-300",
-    busy: "bg-orange-500/15 text-orange-300",
-    "no-answer": "bg-orange-500/15 text-orange-300",
-    canceled: "bg-white/[0.06] text-white/45",
+function StatusPill({ call }: { call: TelephonyCall }) {
+  const { statusLabel, tone } = describeCall(call);
+  const toneClass: Record<string, string> = {
+    neutral: "bg-white/[0.06] text-white/55",
+    info: "bg-sky-500/15 text-sky-300",
+    progress: "bg-emerald-500/15 text-emerald-300",
+    success: "bg-emerald-500/20 text-emerald-200",
+    warning: "bg-amber-500/15 text-amber-300",
+    error: "bg-red-500/15 text-red-300",
   };
   return (
     <span
-      className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded-full ${tone[status]}`}
+      className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded-full ${toneClass[tone]}`}
     >
-      {status}
+      {statusLabel}
+    </span>
+  );
+}
+
+function AnswerTypePill({ call }: { call: TelephonyCall }) {
+  if (!call.amd_result) return null;
+  const labelMap: Record<AnswerType, string> = {
+    human: "Human",
+    voicemail: "Voicemail",
+    unknown: "Unknown",
+  };
+  const toneMap: Record<AnswerType, string> = {
+    human: "bg-emerald-500/15 text-emerald-300",
+    voicemail: "bg-amber-500/15 text-amber-300",
+    unknown: "bg-white/[0.06] text-white/55",
+  };
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span
+        className={`text-[10px] px-1.5 py-0.5 rounded-full ${toneMap[call.amd_result]}`}
+      >
+        {labelMap[call.amd_result]}
+      </span>
+      {call.voicemail_dropped && (
+        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-500/15 text-violet-300">
+          VM dropped
+        </span>
+      )}
     </span>
   );
 }

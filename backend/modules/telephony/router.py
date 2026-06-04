@@ -110,6 +110,16 @@ def _row_to_response(row: TelephonyCall) -> CallResponse:
         error_code=row.error_code,
         error_message=row.error_message,
         retry_count=row.retry_count,
+        amd_result=row.amd_result,
+        amd_confidence=(
+            float(row.amd_confidence)
+            if row.amd_confidence is not None
+            else None
+        ),
+        voicemail_detected_at=_tz(row.voicemail_detected_at),
+        voicemail_dropped=bool(row.voicemail_dropped),
+        voicemail_dropped_at=_tz(row.voicemail_dropped_at),
+        voicemail_recording_url=row.voicemail_recording_url,
         extra=row.extra,
         created_at=_tz(row.created_at),
         updated_at=_tz(row.updated_at),
@@ -204,6 +214,9 @@ async def initiate_call(
             record=data.record,
             dial_timeout_seconds=data.dial_timeout_seconds,
             answering_machine_detection=data.answering_machine_detection,
+            voicemail_enabled=data.voicemail_enabled,
+            voicemail_message_url=data.voicemail_message_url,
+            amd_unknown_fallback=data.amd_unknown_fallback,
         )
     except TelephonyError as exc:
         raise _to_http(exc) from exc
@@ -219,13 +232,21 @@ async def initiate_call(
 async def list_calls(
     limit: int = 50,
     status: str | None = None,
+    answered_by: str | None = None,
     tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
     svc: TelephonyService = Depends(get_telephony_service),
 ):
+    """List recent calls.
+
+    ``answered_by`` filters by AMD classification: ``human`` | ``voicemail``
+    | ``unknown`` (used by the dashboard answer-type filter).
+    """
+
     rows = await svc.list_calls(
         organization_id=_tenant_org_id(tenant),
         limit=limit,
         status=status,
+        answered_by=answered_by,
     )
     return CallListResponse(calls=[_row_to_response(r) for r in rows])
 
@@ -344,6 +365,37 @@ async def cancel_call(
     return _row_to_response(row)
 
 
+@router.delete("/calls/{call_id}", status_code=204)
+async def delete_call(
+    call_id: uuid.UUID,
+    tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
+    svc: TelephonyService = Depends(get_telephony_service),
+):
+    """Permanently delete a call record + its event history.
+
+    Cancels the call first if it's still live, then removes the row.
+    Tenant-scoped: a call belonging to another org returns 404.
+    """
+
+    org = _tenant_org_id(tenant)
+    existing = await svc.get_call(call_id)
+    if existing is None:
+        raise HTTPException(404, "call not found")
+    if (
+        existing.organization_id is not None
+        and org is not None
+        and existing.organization_id != org
+    ):
+        raise HTTPException(404, "call not found")
+
+    try:
+        await svc.delete_call(call_id=call_id, organization_id=org)
+    except CallNotFoundError as exc:
+        raise _to_http(exc) from exc
+    except TelephonyError as exc:
+        raise _to_http(exc) from exc
+
+
 # ---------------------------------------------------------------------------
 # Webhooks (no auth header — signed by Twilio)
 # ---------------------------------------------------------------------------
@@ -369,6 +421,16 @@ async def webhook_voice(
 
     form_dict = dict((await request.form()).multi_items())
 
+    # Full payload logging so the exact AMD fields Twilio sent are auditable.
+    log.info(
+        "telephony.webhook.voice.received",
+        call_sid=form_dict.get("CallSid"),
+        answered_by=form_dict.get("AnsweredBy"),
+        call_status=form_dict.get("CallStatus"),
+        machine_detection_duration=form_dict.get("MachineDetectionDuration"),
+        payload=form_dict,
+    )
+
     try:
         await _verify_twilio_signature(request, twilio, form_dict)
     except InvalidWebhookSignatureError as exc:
@@ -378,15 +440,20 @@ async def webhook_voice(
     explicit_room = (
         request.query_params.get("room") or form_dict.get("room")
     )
+    # Twilio synchronous AMD reports its classification as ``AnsweredBy`` on
+    # the voice webhook request (after machineDetectionTimeout elapses).
+    answered_by = form_dict.get("AnsweredBy")
 
+    voicemail_url: str | None = None
     if call_sid:
         # Resolve via the service so inbound calls (no row yet) get a
         # row + AI agent runner bootstrapped on the spot.
-        room, opening = await svc.handle_inbound_voice(
+        room, opening, voicemail_url = await svc.handle_inbound_voice(
             call_sid=call_sid,
             from_number=form_dict.get("From"),
             to_number=form_dict.get("To"),
             explicit_room=explicit_room,
+            answered_by=answered_by,
         )
     else:
         # No CallSid (Twilio "validation" probe): emit safe placeholder.
@@ -397,12 +464,25 @@ async def webhook_voice(
             params=form_dict,
         )
 
-    twiml = svc.build_voice_twiml(room_name=room, opening_say=opening)
-    log.info(
-        "telephony.webhook.voice.twiml",
-        room=room,
-        sid=call_sid,
-    )
+    if voicemail_url:
+        # AMD detected a machine -> play the pre-recorded voicemail instead of
+        # bridging the call into the AI agent's room.
+        twiml = svc.build_voicemail_twiml(recording_url=voicemail_url)
+        log.info(
+            "telephony.voicemail.playback.started",
+            room=room,
+            sid=call_sid,
+            answered_by=answered_by,
+            recording_url=voicemail_url,
+            twiml=twiml,
+        )
+    else:
+        twiml = svc.build_voice_twiml(room_name=room, opening_say=opening)
+        log.info(
+            "telephony.webhook.voice.twiml",
+            room=room,
+            sid=call_sid,
+        )
     return Response(content=twiml, media_type="application/xml")
 
 
