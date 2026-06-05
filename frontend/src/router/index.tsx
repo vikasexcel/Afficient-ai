@@ -12,6 +12,7 @@ import Leads from "@/pages/Leads";
 import Analytics from "@/pages/Analytics";
 import Transcripts from "@/pages/Transcripts";
 import Playbooks from "@/pages/Playbooks";
+import AmdDiagnostics from "@/pages/AmdDiagnostics";
 import Settings from "@/pages/Settings";
 import Documentation from "@/pages/Documentation";
 import ProtectedRoute from "@/router/ProtectedRoute";
@@ -119,6 +120,15 @@ export const router =
       element: (
         <ProtectedRoute>
           <Transcripts />
+        </ProtectedRoute>
+      ),
+    },
+
+    {
+      path: "/diagnostics",
+      element: (
+        <ProtectedRoute>
+          <AmdDiagnostics />
         </ProtectedRoute>
       ),
     },

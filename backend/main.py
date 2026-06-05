@@ -52,6 +52,23 @@ async def lifespan(app: FastAPI):
             )
 
     try:
+        from database.session import SessionLocal
+        from modules.campaign.scheduler_diagnostics import scheduler_status
+
+        db = SessionLocal()
+        try:
+            sched = scheduler_status(db)
+            if not sched["scheduler_online"]:
+                log.warning(
+                    "app.startup.scheduler_offline",
+                    worker_running=sched["worker_running"],
+                    beat_running=sched["beat_running"],
+                    redis_connected=sched["redis_connected"],
+                    queued_executions=sched["queued_executions"],
+                    message=sched["message"],
+                )
+        finally:
+            db.close()
         yield
     finally:
         await shutdown_telephony()

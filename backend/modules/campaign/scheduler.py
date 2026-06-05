@@ -22,7 +22,6 @@ flips them back to ``active`` so the next tick picks them up again.
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timedelta
 
 from sqlalchemy import case, func, select, update
@@ -61,16 +60,23 @@ _TERMINAL = (EXEC_COMPLETED, EXEC_FAILED)
 
 
 def _default_dispatcher(db: Session, executions: list[Execution]) -> None:
-    """Run each execution to completion via the in-process worker.
+    """Dispatch each due execution.
 
-    Imported lazily so the engine (and its tests) don't pull the OpenAI
-    client unless an execution is actually dispatched.
+    Dial-candidate lead executions are originated by the FastAPI process over
+    authenticated internal HTTP (see :func:`modules.campaign.worker.
+    dispatch_execution`) so the realtime AI agent (LiveKit room + STT/LLM/TTS
+    + SIP bridge) runs on the long-running uvicorn event loop instead of the
+    short-lived Celery ``asyncio.run`` loop. Legacy / non-dial executions
+    still run in-process.
+
+    Imported lazily so the engine (and its tests) don't pull the OpenAI /
+    HTTP machinery unless an execution is actually dispatched.
     """
 
-    from modules.campaign.worker import run_execution
+    from modules.campaign.worker import dispatch_execution
 
     for execution in executions:
-        asyncio.run(run_execution(db, execution))
+        dispatch_execution(db, execution)
 
 
 def _resolve_pacing(campaign: Campaign) -> tuple[int, int]:
@@ -318,6 +324,14 @@ class CampaignScheduler:
         enqueued_total = queued + active + completed + failed
         terminal = completed + failed
 
+        # ``failed`` (status) also covers rows parked waiting for a retry
+        # (retry_status=scheduled). ``failed_executions`` is the count of
+        # *terminally* failed executions (no further retry: None/exhausted).
+        scheduled_retries = CampaignScheduler._scheduled_retry_count(
+            db, campaign.id
+        )
+        failed_executions = max(0, failed - scheduled_retries)
+
         total_leads = 0
         if campaign.lead_list_id is not None:
             from modules.leads.model import Lead
@@ -346,6 +360,7 @@ class CampaignScheduler:
             "active_calls": active,
             "completed_calls": completed,
             "failed_calls": failed,
+            "failed_executions": failed_executions,
             "pending_leads": pending,
             "progress_percent": progress,
             # Retry-engine metrics.

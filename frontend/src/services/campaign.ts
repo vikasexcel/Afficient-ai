@@ -13,6 +13,22 @@ export type CreateCampaignResponse = {
   status: string;
 };
 
+export type SchedulerStatus = {
+  worker_running: boolean;
+  beat_running: boolean;
+  redis_connected: boolean;
+  scheduler_online: boolean;
+  queued_executions: number;
+  queued_execution_count: number;
+  active_executions: number;
+  last_scheduler_tick: string | null;
+  last_tick: string | null;
+  last_tick_recent: boolean;
+  scheduler_interval_seconds: number;
+  redis_error: string | null;
+  message: string;
+};
+
 export type ActivateCampaignResponse = {
   workflow_id: string | null;
   state: string;
@@ -94,6 +110,11 @@ export async function deleteCampaign(id: string): Promise<void> {
   await api.delete(`/campaigns/${id}`);
 }
 
+export async function getSchedulerStatus(): Promise<SchedulerStatus> {
+  const res = await api.get<SchedulerStatus>("/campaigns/scheduler-status");
+  return res.data;
+}
+
 export async function activateCampaign(
   campaignId: string
 ): Promise<ActivateCampaignResponse> {
@@ -137,6 +158,10 @@ export async function setVoicemailConfig(
     amd_unknown_fallback?: "human" | "voicemail";
     voicemail_message_url?: string;
     file?: File;
+  },
+  opts?: {
+    /** 0..100 upload progress callback (only meaningful for file uploads). */
+    onUploadProgress?: (percent: number) => void;
   }
 ): Promise<VoicemailConfig & { campaign_id: string }> {
   const form = new FormData();
@@ -152,7 +177,16 @@ export async function setVoicemailConfig(
   const res = await api.post<VoicemailConfig & { campaign_id: string }>(
     `/campaigns/${campaignId}/voicemail`,
     form,
-    { headers: { "Content-Type": "multipart/form-data" } }
+    {
+      headers: { "Content-Type": "multipart/form-data" },
+      onUploadProgress: (evt) => {
+        if (!opts?.onUploadProgress) return;
+        const total = evt.total ?? 0;
+        if (total > 0) {
+          opts.onUploadProgress(Math.round((evt.loaded / total) * 100));
+        }
+      },
+    }
   );
   return res.data;
 }

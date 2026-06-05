@@ -65,6 +65,18 @@ class InitiateCallRequest(BaseModel):
     # Pre-populate this if the caller wants to reuse a known room name.
     room_name: str | None = Field(default=None, max_length=128)
 
+    # ------------------------------------------------------------------ #
+    # Internal service-to-service fields. These are ONLY honored when the
+    # request is authenticated with the internal service token (the campaign
+    # scheduler dispatching a call). For normal tenant-authenticated requests
+    # they are ignored — the organization is derived from the caller's JWT and
+    # there is no execution to link. This keeps external callers from spoofing
+    # another org or attaching a call to an arbitrary campaign execution.
+    # ------------------------------------------------------------------ #
+    organization_id: uuid.UUID | None = None
+    created_by: uuid.UUID | None = None
+    execution_id: uuid.UUID | None = None
+
     @field_validator("to_number")
     @classmethod
     def _v_to(cls, v: str) -> str:

@@ -16,6 +16,7 @@ import {
   Sparkles,
   Trash2,
   User,
+  Volume2,
   Waves,
   X,
 } from "lucide-react";
@@ -1379,6 +1380,19 @@ function AnswerTypePill({ call }: { call: TelephonyCall }) {
         <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-500/15 text-violet-300">
           VM dropped
         </span>
+      )}
+      {call.voicemail_recording_url && (
+        <a
+          href={call.voicemail_recording_url}
+          target="_blank"
+          rel="noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          className="text-[10px] px-1.5 py-0.5 rounded-full bg-white/[0.06] text-white/60 hover:text-violet-200 hover:bg-violet-500/15 inline-flex items-center gap-1"
+          title="Open voicemail recording"
+        >
+          <Volume2 size={10} />
+          Recording
+        </a>
       )}
     </span>
   );

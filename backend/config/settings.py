@@ -182,6 +182,14 @@ class Settings(BaseSettings):
     TWILIO_AMD_MODE: str = "DetectMessageEnd"
     # Max seconds Twilio waits to classify the answer (3..59).
     TWILIO_AMD_TIMEOUT_SECONDS: int = 30
+    # Asynchronous AMD. When True, Twilio fetches the voice TwiML (the
+    # ``<Dial><Sip>`` bridge) IMMEDIATELY on answer and posts the AMD verdict
+    # separately to ``async_amd_status_callback`` — so the human is bridged to
+    # the AI agent within ~1s instead of waiting ~5s for synchronous AMD to
+    # finish. Voicemail drop is then decided on the async callback, which
+    # redirects the live call to the recording. Set False to restore the legacy
+    # synchronous AMD path (voice TwiML gated on AMD completion).
+    TWILIO_AMD_ASYNC: bool = True
     # Voicemail recording upload + validation.
     # Directory uploaded voicemail audio is written to (local FS until the
     # S3 integration lands — see deliverable notes).
@@ -212,6 +220,39 @@ class Settings(BaseSettings):
     # deployments/tests keep the in-process plan behaviour until telephony is
     # provisioned.
     CAMPAIGN_TELEPHONY_DIALING_ENABLED: bool = False
+
+    # ------------------------------------------------------------------
+    # Campaign dispatch transport (Celery -> FastAPI)
+    # ------------------------------------------------------------------
+    # The realtime AI agent (LiveKit room, STT/LLM/TTS sessions, SIP bridge)
+    # MUST run inside the long-lived FastAPI/uvicorn event loop. The Celery
+    # scheduler runs each tick in a short-lived ``asyncio.run`` loop that is
+    # torn down the moment the coroutine returns — spawning the agent there
+    # orphaned its background task and killed the shared async LiveKit/Redis
+    # clients ("Event loop is closed" / "Future attached to a different loop").
+    #
+    # When True (default) the scheduler does NOT originate calls itself: it
+    # builds the dial payload and sends an authenticated internal HTTP request
+    # to ``POST {INTERNAL_API_BASE_URL}{API_PREFIX}/telephony/calls`` so the
+    # FastAPI process owns room creation + agent lifecycle. Set False only to
+    # restore the legacy in-process ``asyncio.run`` dial path (tests / debug).
+    CAMPAIGN_DISPATCH_VIA_HTTP: bool = True
+    # Base URL of the FastAPI process the scheduler dispatches calls to. In a
+    # single-host bare-metal/PM2 deploy this is the local uvicorn bind.
+    INTERNAL_API_BASE_URL: str = "http://localhost:8000"
+    # Shared secret authenticating service-to-service calls (sent as the
+    # ``X-Internal-Token`` header). Falls back to ``JWT_SECRET`` when unset so
+    # the feature works out of the box on a single-tenant host; set an explicit
+    # value in multi-host deployments.
+    INTERNAL_SERVICE_TOKEN: str = ""
+    # HTTP timeout (seconds) for the scheduler -> FastAPI dispatch request.
+    CAMPAIGN_DISPATCH_HTTP_TIMEOUT_SECONDS: float = 30.0
+
+    @property
+    def internal_service_token(self) -> str:
+        """Effective shared secret for internal service-to-service auth."""
+
+        return self.INTERNAL_SERVICE_TOKEN or self.JWT_SECRET
 
     # ------------------------------------------------------------------
     # Campaign call-scheduling engine (Celery Beat + pacing)

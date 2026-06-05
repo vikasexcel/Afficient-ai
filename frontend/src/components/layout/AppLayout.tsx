@@ -1,3 +1,4 @@
+import SchedulerOfflineBanner from "@/components/campaign/SchedulerOfflineBanner";
 import Sidebar from "./Sidebar";
 import Header from "./Header";
 
@@ -15,6 +16,7 @@ export default function AppLayout({
 
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
         <Header />
+        <SchedulerOfflineBanner />
 
         <main className="app-content flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
           {children}

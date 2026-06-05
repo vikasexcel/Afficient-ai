@@ -174,6 +174,7 @@ class TwilioClient:
         machine_detection_timeout: int | None = None,
         status_callback_path: str = "/api/v1/telephony/webhooks/status",
         voice_callback_path: str = "/api/v1/telephony/webhooks/voice",
+        amd_callback_path: str = "/api/v1/telephony/webhooks/amd",
     ) -> OriginatedCall:
         """Originate one outbound call.
 
@@ -272,19 +273,28 @@ class TwilioClient:
             )
             # Twilio accepts 3..59 seconds.
             kwargs["machine_detection_timeout"] = max(3, min(59, int(timeout)))
-            # Surface AnsweredBy on the status callback too (async AMD).
-            kwargs["status_callback_event"] = [
-                "initiated",
-                "ringing",
-                "answered",
-                "completed",
-            ]
+            # Asynchronous AMD: Twilio executes the voice TwiML (<Dial><Sip>
+            # bridge) immediately on answer and posts the AMD verdict to
+            # ``async_amd_status_callback`` out-of-band. This is what lets the
+            # human reach the AI agent within ~1s instead of waiting for AMD to
+            # finish (~5s for DetectMessageEnd). Without it, Twilio holds the
+            # TwiML until AMD completes — the lead hears silence and often hangs
+            # up before the SIP leg is ever bridged.
+            if settings.TWILIO_AMD_ASYNC:
+                amd_url = (
+                    f"{self._public_base_url}{amd_callback_path}"
+                    f"?room={room_name}"
+                )
+                kwargs["async_amd"] = "true"
+                kwargs["async_amd_status_callback"] = amd_url
+                kwargs["async_amd_status_callback_method"] = "POST"
             log.info(
                 "telephony.twilio.amd_params",
                 room=room_name,
                 to=to_number,
                 machine_detection=kwargs["machine_detection"],
                 machine_detection_timeout=kwargs["machine_detection_timeout"],
+                async_amd=settings.TWILIO_AMD_ASYNC,
             )
 
         try:
@@ -357,6 +367,36 @@ class TwilioClient:
             ) from exc
 
         log.info("telephony.twilio.hangup", call_sid=call_sid)
+
+    async def redirect_call(self, call_sid: str, *, twiml: str) -> None:
+        """Redirect a live call to new TwiML (e.g. async voicemail drop).
+
+        Used by the asynchronous AMD callback: once Twilio classifies the
+        answer as a machine, we update the in-progress call to play the
+        voicemail recording instead of staying bridged to the AI agent.
+        """
+
+        def _do() -> None:
+            self._client.calls(call_sid).update(twiml=twiml)
+
+        try:
+            await asyncio.to_thread(_do)
+        except TwilioRestException as exc:
+            # 404 = call already ended; nothing to redirect (idempotent).
+            if exc.status == 404:
+                log.info("telephony.twilio.redirect_noop", call_sid=call_sid)
+                return
+            log.warning(
+                "telephony.twilio.redirect_failed",
+                call_sid=call_sid,
+                code=exc.code,
+                msg=exc.msg,
+            )
+            raise TwilioProviderError(
+                f"twilio.calls({call_sid}).update failed: {exc.msg}"
+            ) from exc
+
+        log.info("telephony.twilio.redirected", call_sid=call_sid)
 
     # ------------------------------------------------------------------
     # TwiML

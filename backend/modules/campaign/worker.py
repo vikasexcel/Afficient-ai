@@ -11,8 +11,11 @@ removed during the GPT-4o refactor) with a direct call into the modern
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
+
+import httpx
 
 from common.logging import get_logger
 from config.settings import settings
@@ -56,12 +59,26 @@ _EXECUTION_SYSTEM_PROMPT = (
 )
 
 
+def _is_dial_candidate(execution: Execution) -> bool:
+    """True when the execution represents a campaign lead that must be dialed.
+
+    Lead executions carry a ``lead`` dict in their frozen ``context`` (set by
+    :meth:`CampaignService._enqueue_leads`). Generic executions (e.g. the
+    legacy ``/campaigns/execute`` single-shot flow) have no lead and are *not*
+    dial candidates — they keep the in-process LLM-plan behaviour.
+    """
+
+    ctx = execution.context or {}
+    return bool(ctx.get("lead"))
+
+
 def _campaign_dial_context(db, execution: Execution) -> dict | None:
     """Resolve everything needed to place a real outbound call for a lead.
 
     Returns ``None`` when the execution can't be dialled (no lead phone, no
-    playbook, or no owning campaign/org), so the caller falls back to the
-    legacy LLM-plan path.
+    playbook, or no owning campaign/org). For a dial candidate this is a
+    *dialing failure* (not a reason to silently run the LLM plan) — the caller
+    marks the execution failed via the retry engine.
     """
 
     from modules.campaign.model import Campaign
@@ -80,10 +97,13 @@ def _campaign_dial_context(db, execution: Execution) -> dict | None:
     if campaign is None or not campaign.playbook_id:
         return None
 
+    # ``Campaign`` has no ``created_by`` column (only ``organization_id``); the
+    # telephony call is attributed at the org level. ``created_by`` is optional
+    # on ``initiate_outbound`` so we pass ``None`` for campaign-originated calls.
     return {
         "to_number": phone,
         "organization_id": campaign.organization_id,
-        "created_by": campaign.created_by,
+        "created_by": None,
         "campaign_id": campaign.id,
         "playbook_id": campaign.playbook_id,
         "lead_id": (
@@ -94,51 +114,104 @@ def _campaign_dial_context(db, execution: Execution) -> dict | None:
     }
 
 
-async def _dial_execution(db, execution: Execution) -> bool:
-    """Place a real outbound telephony call for this execution.
+def _fail_dial(
+    db,
+    execution: Execution,
+    reason: str,
+) -> None:
+    """Mark a dial failure terminal/retryable via the retry engine.
 
-    Returns ``True`` when a call was originated (the execution is left
-    ``running`` and its outcome is reconciled later by the Twilio status
-    webhook via ``TelephonyService._reconcile_campaign_execution``). Returns
-    ``False`` when dialling isn't possible so the caller falls back to the LLM
-    plan path.
+    A dialing failure is a *retryable* outcome (``failed``): the retry engine
+    schedules another attempt when the campaign has a ``retry_config`` with
+    attempts remaining, otherwise it marks the execution ``failed``. It NEVER
+    falls back to the LLM plan, so production dialing failures stay visible.
+    """
+
+    retry_config, voicemail_config = _campaign_configs(db, execution)
+    process_outcome(
+        db,
+        execution,
+        "failed",
+        retry_config=retry_config,
+        voicemail_config=voicemail_config,
+        failure_reason=reason,
+    )
+
+
+async def _dial_execution(db, execution: Execution) -> None:
+    """Place a real outbound telephony call for a lead execution.
+
+    Owns the full outcome of the dial attempt and NEVER falls back to the LLM
+    stub:
+
+    * Success -> the execution is left ``running``; its terminal outcome is
+      reconciled later by the Twilio status webhook via
+      ``TelephonyService._reconcile_campaign_execution``.
+    * Cannot build a dial context (missing phone / playbook / campaign),
+      telephony unavailable, or ``initiate_outbound`` raises -> the execution
+      is marked failed (retry scheduled when configured) and the failure is
+      logged.
     """
 
     dial = _campaign_dial_context(db, execution)
     if dial is None:
-        log.info(
-            "campaign.execution.dial_skipped",
+        reason = "missing lead phone / playbook / campaign"
+        log.warning(
+            "CAMPAIGN_DIAL_FAILED",
             execution_id=str(execution.id),
-            reason="missing lead phone / playbook / campaign",
+            workflow_id=str(execution.workflow_id),
+            reason=reason,
         )
-        return False
+        _fail_dial(db, execution, reason)
+        return
 
     try:
         from modules.telephony.dependencies import get_telephony_service
 
         svc = get_telephony_service()
-    except Exception as exc:  # telephony not configured -> fall back
+    except Exception as exc:  # telephony not configured / unavailable
+        reason = f"telephony unavailable: {exc}"
         log.warning(
-            "campaign.execution.telephony_unavailable",
+            "CAMPAIGN_DIAL_FAILED",
             execution_id=str(execution.id),
+            workflow_id=str(execution.workflow_id),
+            campaign_id=str(dial["campaign_id"]),
+            reason="telephony_unavailable",
             error=str(exc),
         )
-        return False
+        _fail_dial(db, execution, reason)
+        return
 
     execution.status = "running"
     db.commit()
 
-    row = await svc.initiate_outbound(
-        to_number=dial["to_number"],
-        organization_id=dial["organization_id"],
-        created_by=dial["created_by"],
-        campaign_id=dial["campaign_id"],
-        playbook_id=dial["playbook_id"],
-        lead_id=dial["lead_id"],
-        lead_name=dial["lead_name"],
-        lead_phone=dial["lead_phone"],
-        execution_id=execution.id,
-    )
+    try:
+        row = await svc.initiate_outbound(
+            to_number=dial["to_number"],
+            organization_id=dial["organization_id"],
+            created_by=dial["created_by"],
+            campaign_id=dial["campaign_id"],
+            playbook_id=dial["playbook_id"],
+            lead_id=dial["lead_id"],
+            lead_name=dial["lead_name"],
+            lead_phone=dial["lead_phone"],
+            execution_id=execution.id,
+        )
+    except Exception as exc:
+        # Twilio / LiveKit origination failed, invalid number, etc. Do NOT run
+        # the LLM fallback — surface the failure and let the retry engine decide.
+        log.exception(
+            "CAMPAIGN_DIAL_EXCEPTION",
+            execution_id=str(execution.id),
+            workflow_id=str(execution.workflow_id),
+            campaign_id=str(dial["campaign_id"]),
+            to=dial["to_number"],
+            error=str(exc),
+        )
+        # Re-fetch in case the originating coroutine left the row detached.
+        execution = db.get(Execution, execution.id) or execution
+        _fail_dial(db, execution, f"dial failed: {exc}")
+        return
 
     # Stash the call id on the execution so operators can trace it; the
     # outcome arrives asynchronously via the Twilio status webhook.
@@ -154,7 +227,148 @@ async def _dial_execution(db, execution: Execution) -> bool:
         to=dial["to_number"],
         campaign_id=str(dial["campaign_id"]),
     )
-    return True
+
+
+def _internal_dispatch_url() -> str:
+    """Absolute URL of the FastAPI origination endpoint."""
+
+    base = (settings.INTERNAL_API_BASE_URL or "").rstrip("/")
+    return f"{base}{settings.API_PREFIX}/telephony/calls"
+
+
+def _build_dial_payload(dial: dict, execution: Execution) -> dict:
+    """Serialize a dial context into the ``InitiateCallRequest`` body.
+
+    ``organization_id`` / ``created_by`` / ``execution_id`` are the
+    internal-only fields the FastAPI endpoint honors when the request carries
+    the service token. Persona / framework / opening line / voice / voicemail
+    are intentionally omitted — the playbook (+ campaign ``voicemail_config``)
+    is the single source of truth and is resolved server-side from
+    ``playbook_id`` / ``campaign_id``.
+    """
+
+    def _s(v):
+        return str(v) if v is not None else None
+
+    return {
+        "to_number": dial["to_number"],
+        "organization_id": _s(dial["organization_id"]),
+        "created_by": _s(dial["created_by"]),
+        "campaign_id": _s(dial["campaign_id"]),
+        "playbook_id": _s(dial["playbook_id"]),
+        "lead_id": _s(dial["lead_id"]),
+        "lead_name": dial["lead_name"],
+        "lead_phone": dial["lead_phone"],
+        "execution_id": str(execution.id),
+    }
+
+
+def _dispatch_dial_http(db, execution: Execution) -> None:
+    """Originate a lead call by handing off to the FastAPI process.
+
+    This is the production dial path. It runs **synchronously** in the Celery
+    worker thread (no event loop at all), so it can never orphan the AI agent
+    task or kill the shared async LiveKit/Redis clients. The FastAPI process
+    owns LiveKit room creation, agent startup, STT/LLM/TTS, and SIP bridging
+    on its long-running event loop.
+
+    Outcome handling mirrors :func:`_dial_execution`:
+
+    * success -> execution left ``running`` (reconciled later by the Twilio
+      status webhook); ``telephony_call_id`` stashed on the context.
+    * undiallable lead / dispatch failure -> marked failed via the retry
+      engine (retry scheduled when configured). NEVER falls back to the LLM.
+    """
+
+    dial = _campaign_dial_context(db, execution)
+    if dial is None:
+        reason = "missing lead phone / playbook / campaign"
+        log.warning(
+            "CAMPAIGN_DISPATCH_FAILED",
+            execution_id=str(execution.id),
+            workflow_id=str(execution.workflow_id),
+            reason=reason,
+        )
+        _fail_dial(db, execution, reason)
+        return
+
+    payload = _build_dial_payload(dial, execution)
+    url = _internal_dispatch_url()
+
+    # Mark running before the request so a crash mid-dispatch leaves the row
+    # in a non-terminal state the webhook/retry path can still reconcile.
+    execution.status = "running"
+    db.commit()
+
+    log.info(
+        "CAMPAIGN_DISPATCH_STARTED",
+        execution_id=str(execution.id),
+        campaign_id=str(dial["campaign_id"]),
+        to=dial["to_number"],
+        url=url,
+    )
+
+    try:
+        resp = httpx.post(
+            url,
+            json=payload,
+            headers={"X-Internal-Token": settings.internal_service_token},
+            timeout=settings.CAMPAIGN_DISPATCH_HTTP_TIMEOUT_SECONDS,
+        )
+        resp.raise_for_status()
+        body = resp.json()
+    except Exception as exc:
+        log.warning(
+            "CAMPAIGN_DISPATCH_FAILED",
+            execution_id=str(execution.id),
+            campaign_id=str(dial["campaign_id"]),
+            to=dial["to_number"],
+            error=str(exc),
+        )
+        # Re-fetch in case the session was left in an odd state.
+        execution = db.get(Execution, execution.id) or execution
+        _fail_dial(db, execution, f"dispatch failed: {exc}")
+        return
+
+    call_id = body.get("id")
+    merged = dict(execution.context or {})
+    merged["telephony_call_id"] = call_id
+    execution.context = merged
+    db.commit()
+
+    log.info(
+        "CAMPAIGN_DISPATCH_SUCCEEDED",
+        execution_id=str(execution.id),
+        campaign_id=str(dial["campaign_id"]),
+        call_id=call_id,
+        call_sid=body.get("call_sid"),
+        room=body.get("room_name"),
+        status=body.get("status"),
+        to=dial["to_number"],
+    )
+
+
+def dispatch_execution(db, execution: Execution) -> None:
+    """Scheduler dispatch entry point (synchronous, Celery-safe).
+
+    * Dial-candidate lead executions are originated by the FastAPI process
+      over authenticated internal HTTP (default) so the AI agent lifecycle is
+      tied to the long-running uvicorn event loop. No ``asyncio.run`` touches
+      the LiveKit / agent code here.
+    * Everything else (and the legacy in-process dial path, when
+      ``CAMPAIGN_DISPATCH_VIA_HTTP`` is False) runs through ``run_execution``
+      on a short-lived loop — these paths do not spawn a long-lived agent.
+    """
+
+    is_dial = (
+        settings.CAMPAIGN_TELEPHONY_DIALING_ENABLED
+        and _is_dial_candidate(execution)
+    )
+    if is_dial and settings.CAMPAIGN_DISPATCH_VIA_HTTP:
+        _dispatch_dial_http(db, execution)
+        return
+
+    asyncio.run(run_execution(db, execution))
 
 
 async def run_execution(db, execution: Execution) -> Execution:
@@ -165,19 +379,17 @@ async def run_execution(db, execution: Execution) -> Execution:
     ``failed`` if anything raised).
     """
 
-    # Preferred path: place a real outbound call (Twilio AMD + voicemail drop).
-    # The terminal outcome is reconciled later by the status webhook, so we
-    # return here with the execution left ``running``.
-    if settings.CAMPAIGN_TELEPHONY_DIALING_ENABLED:
-        try:
-            if await _dial_execution(db, execution):
-                return execution
-        except Exception as exc:  # dialling failed -> fall back to LLM plan
-            log.warning(
-                "campaign.execution.dial_failed",
-                execution_id=str(execution.id),
-                error=str(exc),
-            )
+    # Preferred path: place a real outbound call (Twilio AMD + voicemail drop)
+    # for a campaign lead. ``_dial_execution`` owns the full outcome of the
+    # attempt — success leaves the row ``running`` (reconciled later by the
+    # status webhook); any failure marks the execution failed via the retry
+    # engine. There is intentionally NO LLM fallback here: silently completing
+    # a failed dial would hide production telephony failures.
+    if settings.CAMPAIGN_TELEPHONY_DIALING_ENABLED and _is_dial_candidate(
+        execution
+    ):
+        await _dial_execution(db, execution)
+        return execution
 
     execution.status = "running"
     db.commit()

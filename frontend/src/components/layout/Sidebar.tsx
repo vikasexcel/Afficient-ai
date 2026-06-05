@@ -8,6 +8,7 @@ import {
   PhoneOutgoing,
   BarChart3,
   FileText,
+  Stethoscope,
   Settings as SettingsIcon,
   X,
 } from "lucide-react";
@@ -31,6 +32,7 @@ const PRIMARY: Item[] = [
 const INSIGHTS: Item[] = [
   { to: "/analytics", label: "Analytics", icon: BarChart3 },
   { to: "/transcripts", label: "Transcripts", icon: FileText },
+  { to: "/diagnostics", label: "AMD Diagnostics", icon: Stethoscope },
 ];
 
 export default function Sidebar() {

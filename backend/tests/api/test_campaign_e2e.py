@@ -220,6 +220,14 @@ async def test_campaign_execute_processes_a_queued_lead(
     monkeypatch.setattr(
         campaign_worker, "get_openai", lambda: _FakeClient()
     )
+    # This test exercises the in-process LLM-plan fallback path explicitly.
+    # Real outbound dialing is covered by tests/api/test_campaign_dialing_e2e.py;
+    # disable it here so the worker doesn't originate a live Twilio/LiveKit call.
+    monkeypatch.setattr(
+        campaign_worker.settings,
+        "CAMPAIGN_TELEPHONY_DIALING_ENABLED",
+        False,
+    )
 
     playbook_id = _seed_playbook(client, auth_headers)
     lead_list_id, _ = _seed_lead_list(client, auth_headers, n=2)

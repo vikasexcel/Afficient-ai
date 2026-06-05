@@ -22,9 +22,11 @@ from modules.campaign.schema import (
     CampaignListResponse,
     CampaignOut,
     CreateCampaign,
+    SchedulerStatusOut,
     UpdateCampaign,
 )
 from modules.campaign.scheduler import CampaignScheduler
+from modules.campaign.scheduler_diagnostics import scheduler_status
 from modules.campaign.service import CampaignService
 from modules.campaign.voicemail import (
     VoicemailValidationError,
@@ -96,6 +98,17 @@ async def list_campaigns(
 # static path segments ("activate", "execute", "executions") are matched
 # first and never swallowed by the UUID path param.
 # ---------------------------------------------------------------------------
+
+
+@router.get("/scheduler-status", response_model=SchedulerStatusOut)
+async def get_scheduler_status(
+    db: Session = Depends(get_db),
+    tenant=Depends(get_current_tenant),
+):
+    """Report Celery worker / Beat / Redis health for campaign dispatch."""
+
+    _ = tenant  # tenant-scoped auth; counts are global across the deployment
+    return scheduler_status(db)
 
 
 @router.post("/activate")

@@ -198,6 +198,8 @@ class ConversationOrchestrator:
         self._voice_provider = voice_provider
         # VOICE_USED_IN_CALL is logged once, on the first utterance.
         self._voice_logged = False
+        # FIRST_TTS_GENERATED is logged once, when the first audio is produced.
+        self._first_tts_logged = False
         self._sample_rate = sample_rate
         self._idle_timeout_seconds = idle_timeout_seconds
         self._publish_metrics = publish_metrics
@@ -336,6 +338,14 @@ class ConversationOrchestrator:
                     call_id=self._call_id,
                     room=self._room,
                     ignored_agents=sorted(self._agent_identities),
+                )
+                # Greppable marker: the agent is now in the room with STT +
+                # TTS sessions open (STT/LLM/TTS initialized). Pairs with
+                # LIVEKIT_ROOM_CREATED and FIRST_TTS_GENERATED.
+                log.info(
+                    "AGENT_JOINED_ROOM",
+                    call_id=self._call_id,
+                    room=self._room,
                 )
 
                 # Gate the opening line on the human actually being in the
@@ -964,6 +974,19 @@ class ConversationOrchestrator:
                     ttfb_ms=getattr(stats, "ttfb_ms", None),
                     stream_end_ms=getattr(stats, "stream_end_ms", None),
                 )
+                # Greppable marker: first audio packet produced for this call
+                # (the greeting, when ``source == "opening"``). Proves the
+                # STT→LLM→TTS pipeline reached audio output.
+                if not self._first_tts_logged and bytes_streamed:
+                    self._first_tts_logged = True
+                    log.info(
+                        "FIRST_TTS_GENERATED",
+                        call_id=self._call_id,
+                        room=self._room,
+                        source=source,
+                        bytes_streamed=bytes_streamed,
+                        chars=len(text),
+                    )
                 log.info(
                     "ai.orchestrator.TTS_AUDIO_DURATION",
                     call_id=self._call_id,

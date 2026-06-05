@@ -154,3 +154,49 @@ export async function cancelCall(callId: string): Promise<TelephonyCall> {
 export async function deleteCall(callId: string): Promise<void> {
   await api.delete(`/telephony/calls/${encodeURIComponent(callId)}`);
 }
+
+// ---------------------------------------------------------------------------
+// AMD / Voicemail diagnostics — mirror of GET /telephony/diagnostics
+// ---------------------------------------------------------------------------
+
+export type AmdDiagnostics = {
+  twilio_path_active: boolean;
+  livekit_path_active: boolean;
+  campaign_telephony_dialing_enabled: boolean;
+  amd_enabled_global: boolean;
+  amd_mode: string;
+  amd_timeout_seconds: number;
+  twilio: {
+    configured: boolean;
+    dummy_credentials: boolean;
+    auth_mode: string | null;
+    public_base_url: string | null;
+    signature_validation: boolean;
+    can_validate_signatures: boolean;
+    phone_number: string | null;
+  };
+  livekit_sip: {
+    sip_uri: string | null;
+    outbound_trunk_id: string | null;
+  };
+  voicemail: {
+    require_public_url: boolean;
+    url_network_check: boolean;
+    public_route: string;
+    allowed_formats: string;
+    max_bytes: number;
+  };
+  voicemail_config_status: {
+    campaigns_configured: number;
+    campaigns_enabled: number;
+    campaigns_with_recording: number;
+    campaigns_retry_on_voicemail: number;
+  };
+  real_voicemail_call_ready: boolean;
+  blockers: string[];
+};
+
+export async function getAmdDiagnostics(): Promise<AmdDiagnostics> {
+  const res = await api.get<AmdDiagnostics>("/telephony/diagnostics");
+  return res.data;
+}

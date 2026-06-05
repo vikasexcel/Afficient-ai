@@ -954,6 +954,16 @@ class TelephonyService:
                     duration_seconds=duration_seconds,
                     recording_url=row.voicemail_recording_url,
                 )
+                # Explicit, greppable playback-completion markers.
+                log.info(
+                    "VOICEMAIL_PLAY_COMPLETED"
+                    if playback_ok
+                    else "VOICEMAIL_PLAY_FAILED",
+                    call_sid=call_sid,
+                    final_status=mapped,
+                    duration_seconds=duration_seconds,
+                    recording_url=row.voicemail_recording_url,
+                )
 
             await self._registry.stop(row.room_name, wait=False)
             await self._record_event(
@@ -1107,6 +1117,54 @@ class TelephonyService:
         # caller is detected in the room — not via Twilio <Say>.
         return room_name, None, None
 
+    async def handle_async_amd(
+        self,
+        *,
+        call_sid: str,
+        answered_by: str | None,
+    ) -> str | None:
+        """Asynchronous AMD callback entry point.
+
+        With async AMD the call is already bridged to the AI agent by the time
+        Twilio classifies the answer. If AMD decides a voicemail drop, we must
+        redirect the *live* call to the recording (the synchronous path returns
+        TwiML before bridging, but here the bridge already happened).
+
+        Returns the recording URL when a drop was performed, else ``None``.
+        """
+
+        row = await asyncio.to_thread(self._fetch_by_sid, call_sid)
+        if row is None:
+            log.warning("telephony.amd.async_no_row", call_sid=call_sid)
+            return None
+
+        recording_url = await self._handle_amd_on_answer(row, answered_by)
+        if not recording_url:
+            # Human / fallback-to-human → leave the AI conversation bridged.
+            return None
+
+        # Machine detected on an already-bridged call → redirect the live leg
+        # to play the voicemail recording. The agent was already stopped by
+        # ``_handle_amd_on_answer``.
+        twiml = self.build_voicemail_twiml(recording_url=recording_url)
+        try:
+            await self._twilio.redirect_call(call_sid, twiml=twiml)
+            log.info(
+                "VOICEMAIL_PLAY_STARTED",
+                call_sid=call_sid,
+                room=row.room_name,
+                answered_by=answered_by,
+                recording_url=recording_url,
+            )
+        except TelephonyError as exc:
+            log.warning(
+                "telephony.amd.async_redirect_failed",
+                call_sid=call_sid,
+                room=row.room_name,
+                error=exc.message,
+            )
+        return recording_url
+
     async def _handle_amd_on_answer(
         self,
         row: TelephonyCall,
@@ -1166,6 +1224,17 @@ class TelephonyService:
         )
 
         if should_drop:
+            # Explicit, greppable marker for the moment voicemail drop is
+            # decided on a real answered call (AMD -> machine/fallback).
+            log.info(
+                "VOICEMAIL_TRIGGERED",
+                call_sid=row.call_sid,
+                room=row.room_name,
+                answered_by=answered_by,
+                amd_result=amd.result,
+                amd_confidence=amd.confidence,
+                recording_url=recording_url,
+            )
             # No AI conversation — stop the agent sitting in the room so it
             # doesn't talk over the voicemail playback, and audit the drop.
             await self._registry.stop(row.room_name, wait=False)

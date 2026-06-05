@@ -1,0 +1,17 @@
+[Unit]
+Description=Aifficient Celery worker (campaign call scheduler)
+After=network.target redis.service postgresql.service
+Wants=redis.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/Afficient-ai/backend
+EnvironmentFile=/home/ubuntu/Afficient-ai/backend/.env
+ExecStart=/home/ubuntu/Afficient-ai/backend/venv/bin/celery -A modules.campaign.celery_app:celery_app worker -l info -Q celery --concurrency=2
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

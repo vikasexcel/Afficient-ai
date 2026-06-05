@@ -50,6 +50,45 @@ services:
       timeout: 3s
       retries: 10
 
+  # Campaign call scheduler — dispatches queued executions to the telephony
+  # worker. Without these two services, activate() enqueues leads but no
+  # outbound calls are placed.
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aifficient_celery_worker
+    restart: unless-stopped
+    command: >
+      celery -A modules.campaign.celery_app:celery_app worker
+      -l info -Q celery --concurrency=2
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./uploads:/app/uploads
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aifficient_celery_beat
+    restart: unless-stopped
+    command: >
+      celery -A modules.campaign.celery_app:celery_app beat
+      -l info --scheduler celery.beat:PersistentScheduler
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+      celery-worker:
+        condition: service_started
+
 volumes:
   aifficient_pgdata:
   aifficient_redisdata:

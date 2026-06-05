@@ -157,6 +157,24 @@ class CampaignOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class SchedulerStatusOut(BaseModel):
+    """Operational health of the Celery campaign call scheduler."""
+
+    worker_running: bool
+    beat_running: bool
+    redis_connected: bool
+    scheduler_online: bool
+    queued_executions: int
+    queued_execution_count: int
+    active_executions: int
+    last_scheduler_tick: str | None = None
+    last_tick: str | None = None
+    last_tick_recent: bool = False
+    scheduler_interval_seconds: float = 60.0
+    redis_error: str | None = None
+    message: str
+
+
 class CampaignListResponse(BaseModel):
     campaigns: list[CampaignOut]
     total: int

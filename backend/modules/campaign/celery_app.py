@@ -33,12 +33,21 @@ celery_app.conf.update(
     enable_utc=True,
     task_track_started=True,
     beat_schedule={
+        "campaign-beat-heartbeat": {
+            "task": "campaign.beat_heartbeat",
+            "schedule": 30.0,
+        },
         "campaign-scheduler-tick": {
             "task": "campaign.scheduler_tick",
             "schedule": settings.CAMPAIGN_SCHEDULER_INTERVAL_SECONDS,
         },
     },
 )
+
+# Register every SQLAlchemy model before tasks touch the DB. Celery workers
+# do not import ``main:app``, so without this import mapper resolution fails
+# with NoReferencedTableError (e.g. campaigns.organization_id → organizations).
+import database.models  # noqa: F401,E402
 
 # Register tasks (import for side effects). Kept at the bottom to avoid a
 # circular import: ``tasks`` imports ``celery_app`` from this module.

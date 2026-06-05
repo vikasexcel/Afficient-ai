@@ -141,6 +141,9 @@ class LiveKitService:
             raise LiveKitError(f"failed to create room: {exc}") from exc
 
         log.info("livekit.room.created", name=room.name, sid=room.sid)
+        # Greppable lifecycle marker: pairs with AGENT_JOINED_ROOM /
+        # FIRST_TTS_GENERATED so one search traces room -> agent -> audio.
+        log.info("LIVEKIT_ROOM_CREATED", room=room.name, sid=room.sid)
         return _room_to_response(room)
 
     async def list_rooms(self, names: list[str] | None = None) -> list[RoomResponse]:

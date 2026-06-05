@@ -2,17 +2,20 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   BookOpen,
   CalendarClock,
+  CheckCircle2,
   Loader2,
   Megaphone,
   Pencil,
   Rocket,
   Trash2,
   Users,
+  Voicemail,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import AppLayout from "@/components/layout/AppLayout";
 import CreateCampaignDialog from "@/components/campaign/CreateCampaignDialog";
+import VoicemailDialog from "@/components/campaign/VoicemailDialog";
 import { Button } from "@/components/ui/button";
 import {
   activateCampaign,
@@ -38,6 +41,7 @@ export default function Campaigns() {
   const [campaigns, setCampaigns] = useState<CampaignOut[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<CampaignOut | null>(null);
+  const [voicemailFor, setVoicemailFor] = useState<CampaignOut | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -129,9 +133,22 @@ export default function Campaigns() {
             onEdit={setEditing}
             onDelete={handleDelete}
             onLaunch={handleLaunch}
+            onVoicemail={setVoicemailFor}
           />
         )}
       </div>
+
+      {/* Voicemail / AMD settings dialog. */}
+      {voicemailFor && (
+        <VoicemailDialog
+          campaign={voicemailFor}
+          open={Boolean(voicemailFor)}
+          onOpenChange={(o) => {
+            if (!o) setVoicemailFor(null);
+          }}
+          onSaved={refresh}
+        />
+      )}
 
       {/* Controlled edit dialog (no trigger of its own). */}
       {editing && (
@@ -172,6 +189,7 @@ function CampaignsList({
   onEdit,
   onDelete,
   onLaunch,
+  onVoicemail,
 }: {
   campaigns: CampaignOut[];
   canCreate: boolean;
@@ -179,6 +197,7 @@ function CampaignsList({
   onEdit: (c: CampaignOut) => void;
   onDelete: (id: string) => void;
   onLaunch: (c: CampaignOut) => void;
+  onVoicemail: (c: CampaignOut) => void;
 }) {
   return (
     <section className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -191,6 +210,7 @@ function CampaignsList({
           onEdit={onEdit}
           onDelete={onDelete}
           onLaunch={onLaunch}
+          onVoicemail={onVoicemail}
         />
       ))}
     </section>
@@ -204,6 +224,7 @@ function CampaignCard({
   onEdit,
   onDelete,
   onLaunch,
+  onVoicemail,
 }: {
   campaign: CampaignOut;
   canCreate: boolean;
@@ -211,6 +232,7 @@ function CampaignCard({
   onEdit: (c: CampaignOut) => void;
   onDelete: (id: string) => void;
   onLaunch: (c: CampaignOut) => void;
+  onVoicemail: (c: CampaignOut) => void;
 }) {
   const scheduleLabel = useMemo(() => {
     if (campaign.scheduled_at) {
@@ -265,10 +287,23 @@ function CampaignCard({
             : "No lead list selected"}
         </CardLine>
         <CardLine icon={<CalendarClock size={11} />}>{scheduleLabel}</CardLine>
+        <CardLine icon={<Voicemail size={11} />}>
+          <VoicemailSummary vm={campaign.voicemail_config} />
+        </CardLine>
       </div>
 
       {canCreate && (
         <div className="mt-3 pt-3 border-t border-white/[0.05] flex justify-end gap-1.5">
+          <Button
+            variant="ghost"
+            size="xs"
+            disabled={busy}
+            onClick={() => onVoicemail(campaign)}
+            className="text-white/55 hover:text-violet-200"
+          >
+            <Voicemail size={12} />
+            Voicemail
+          </Button>
           {canLaunch && (
             <Button
               variant="ghost"
@@ -308,6 +343,34 @@ function CampaignCard({
         </div>
       )}
     </div>
+  );
+}
+
+function VoicemailSummary({
+  vm,
+}: {
+  vm: CampaignOut["voicemail_config"];
+}) {
+  if (!vm || !vm.voicemail_enabled) {
+    return <span className="text-white/40">Voicemail drop off</span>;
+  }
+  const hasRecording = Boolean(vm.voicemail_message_url);
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className="inline-flex items-center gap-1 text-emerald-300">
+        <CheckCircle2 size={11} /> Voicemail on
+      </span>
+      <span className="text-white/30">·</span>
+      <span className={hasRecording ? "text-white/65" : "text-amber-300"}>
+        {hasRecording ? "recording set" : "no recording"}
+      </span>
+      {vm.retry_on_voicemail && (
+        <>
+          <span className="text-white/30">·</span>
+          <span className="text-white/65">retry</span>
+        </>
+      )}
+    </span>
   );
 }
 
