@@ -578,7 +578,7 @@ export default function Playbooks() {
               </Card>
 
               {/* Card: Branch rules */}
-              <Card
+              {/* <Card
                 icon={<Sparkles size={14} className="text-violet-300" />}
                 title="Smart branching"
                 subtitle="Adapt mid-call when conditions are met (e.g. switch persona once qualified)."
@@ -590,7 +590,7 @@ export default function Playbooks() {
                   canEdit={canEdit}
                   onChange={(branches) => setDetail({ ...detail, branches })}
                 />
-              </Card>
+              </Card> */}
 
               {/* Advanced (collapsed) */}
               <div className="rounded-[12px] border border-white/[0.07] bg-white/[0.02]">
@@ -675,7 +675,7 @@ export default function Playbooks() {
               )}
 
               {/* Test card */}
-              <Card
+              {/* <Card
                 icon={<Sparkles size={14} className="text-violet-300" />}
                 title="Try a sample line"
                 subtitle="Paste what the lead might say. We'll show you what gets scored."
@@ -695,7 +695,7 @@ export default function Playbooks() {
                   Run test turn
                 </Button>
                 {testResult && <TestResult result={testResult} detail={detail} />}
-              </Card>
+              </Card> */}
             </div>
           ) : (
             <div className="bg-white/[0.03] border border-white/[0.07] rounded-[12px] p-10 text-center text-white/40">

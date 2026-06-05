@@ -17,8 +17,8 @@ Current state of features (as observed in code):
 - **OpenAI GPT-4o conversation engine** — **implemented end-to-end** with Redis-backed conversation memory, BANT/MEDDICC qualification, Postgres-persisted transcripts and call summaries. Wired into the frontend Calls page (assistant panel) and Transcripts page (real DB data). `/ai/calls` listing uses a bulk-fetch path (no N+1).
 - **ConversationOrchestrator** wiring STT → GPT-4o → TTS with barge-in — implemented (backend) and exercisable via `scripts/run_ai_agent.py`.
 - **Playbooks** — full CRUD, publish/archive/duplicate, versioned snapshots, dry-run `/test`, declarative branch rules with strict `when`-key allowlist. Drives prompts + qualification on AI calls.
-- Campaigns / workflows / executions — **wired end-to-end**: the worker now talks to the modern `OpenAIClient` (the legacy `AIService.execute` shim was removed). Auth + tenant-scoping enforced on `/campaigns/execute/{wf}` and `/campaigns/executions/{id}`.
-- **Telephony (Twilio)** — outbound originate + status/voice webhooks + LiveKit SIP TwiML. Mock-origination path explicitly **refuses to run when `ENV=production`**.
+- Campaigns / workflows / executions — **wired end-to-end** including a real **dialing pipeline**: activation enqueues per-lead executions, the `CampaignScheduler` (Celery Beat) paces dispatch within business hours, and the worker places real outbound calls via `TelephonyService` (gated by `CAMPAIGN_TELEPHONY_DIALING_ENABLED`). Retry engine, AMD/voicemail-drop, and pacing are implemented. Dial failures fail the execution (no silent LLM fallback). Auth + tenant-scoping enforced on `/campaigns/*`.
+- **Telephony (Twilio + LiveKit SIP)** — outbound originate + status/voice webhooks + `<Dial><Sip>` bridge, Answering Machine Detection + voicemail drop, and reconciliation of terminal call outcomes back onto campaign executions. Mock-origination path explicitly **refuses to run when `ENV=production`**.
 - Frontend **Calls** and **Transcripts** pages — **wired to the live backend** (GPT-4o chat, Deepgram transcribe smoke, real transcripts + summaries). **Leads** and **Analytics** pages remain UI-only with mock data.
 - **Test suite** — 29 pytest cases under `backend/tests/` cover auth, audit scoping, password rules, campaign worker, playbook branches, tenant isolation, rate limit, Twilio prod guard. Run with `pytest tests/`.
 
@@ -137,12 +137,31 @@ afficient-ai/
 │   │   │   └── audit_model.py           AuditLog
 │   │   ├── organization/           org CRUD, rename, transfer ownership, delete
 │   │   ├── members/                list/create/update-role/reset-password/remove
-│   │   ├── campaign/               campaigns, workflows, executions, stub worker
+│   │   ├── campaign/               campaigns, workflows, executions, dialing, scheduler
 │   │   │   ├── router.py / service.py / repository.py / schema.py
-│   │   │   ├── model.py            Campaign
+│   │   │   ├── model.py            Campaign (status, playbook_id, lead_list_id,
+│   │   │   │                       schedule, business_hours, retry/voicemail cfg, pacing)
 │   │   │   ├── workflow_model.py   Workflow
-│   │   │   ├── execution_model.py  Execution
-│   │   │   └── worker.py           in-process executor (calls AIService.execute)
+│   │   │   ├── execution_model.py  Execution (status, outcome, retry bookkeeping)
+│   │   │   ├── worker.py           run_execution: places a REAL outbound call via
+│   │   │   │                       TelephonyService when dialing is enabled (no silent
+│   │   │   │                       LLM fallback on dial failure); else LLM-plan stub
+│   │   │   ├── scheduler.py        CampaignScheduler tick (auto-activate, paced
+│   │   │   │                       dispatch, completion, metrics, retry requeue)
+│   │   │   ├── scheduling.py       business-hours + pacing math
+│   │   │   ├── retry.py            retry engine (process_outcome, backoff, outcomes)
+│   │   │   ├── voicemail.py        AMD / voicemail-drop config + recording upload
+│   │   │   ├── celery_app.py       Celery app + Beat schedule (per-minute tick)
+│   │   │   └── tasks.py            scheduler_tick Celery task
+│   │   ├── telephony/              Twilio + LiveKit SIP outbound/inbound calling
+│   │   │   ├── router.py           originate, status/voice webhooks, list/cancel/retry
+│   │   │   ├── service.py          TelephonyService: initiate_outbound, AMD/voicemail,
+│   │   │   │                       webhook reconcile → campaign execution outcome
+│   │   │   ├── twilio_client.py    Twilio REST + TwiML + signature validation
+│   │   │   ├── amd.py              answer-type detection (human / voicemail / unknown)
+│   │   │   ├── agent_runner.py     in-room AI agent registry/runner
+│   │   │   └── model.py / repository.py / schema.py / dependencies.py / exceptions.py
+│   │   ├── playbook/               playbook CRUD, versions, call-apply, company config
 │   │   ├── ai/                     GPT-4o conversation engine
 │   │   │   ├── router.py           /ai/generate, /ai/converse, /ai/calls/*, /ai/personas
 │   │   │   ├── service.py          AIService: start_call, respond_turn, stream_turn,
@@ -259,7 +278,9 @@ afficient-ai/
 | `auth` | Register, login, `/me`, refresh, logout, audit log | `modules/auth/*` |
 | `organization` | Read/rename/transfer-ownership/delete current tenant | `modules/organization/router.py` |
 | `members` | Org membership CRUD + temp-password reset + invitation email | `modules/members/*` |
-| `campaign` | Campaign → Workflow → Execution chain; stub in-process execution | `modules/campaign/*` |
+| `campaign` | Campaign → Workflow → Execution chain. Activation enqueues one queued `Execution` per lead; the `CampaignScheduler` tick (Celery Beat) paces dispatch within business hours; the worker places a **real outbound call** via `TelephonyService` (Twilio/LiveKit SIP) per lead when `CAMPAIGN_TELEPHONY_DIALING_ENABLED`. Retry engine + AMD/voicemail-drop + pacing supported. | `modules/campaign/*` |
+| `telephony` | Outbound/inbound PSTN via Twilio + LiveKit SIP. `initiate_outbound` creates a `telephony_calls` row + LiveKit room + AI agent, originates the call, and reconciles the terminal status webhook back onto the linked campaign execution. | `modules/telephony/*` |
+| `playbook` | Playbook CRUD, versioned snapshots, publish/archive/duplicate, call-apply (persona/framework/voice/opening line) | `modules/playbook/*` |
 | `ai` | GPT-4o conversation engine: stateless `generate`, stateful `converse`, Redis memory, BANT/MEDDICC qualification, Postgres transcripts/summaries, live STT→LLM→TTS orchestrator | `modules/ai/*` |
 | `livekit` | Create/list/get/delete LiveKit rooms, mint JWT tokens, store local session rows | `modules/livekit/*` |
 | `tts` | List voices, speak text into a LiveKit room via ElevenLabs PCM stream | `modules/tts/*` |
@@ -327,7 +348,7 @@ Backend routes are mounted under `settings.API_PREFIX` (default `/api/v1`):
 | `/auth` | auth | `POST /register`, `POST /login`, `GET /me`, `POST /refresh`, `POST /logout`, `GET /audit`, `GET /tenant`, `GET /admin` |
 | `/organization` | organization | `GET /`, `PATCH /`, `POST /transfer-ownership`, `DELETE /` |
 | `/members` | members | `GET /`, `POST /`, `PATCH /{id}/role`, `POST /{id}/reset-password`, `DELETE /{id}` |
-| `/campaigns` | campaign | `POST /`, `POST /activate`, `POST /execute/{workflow_id}`, `GET /executions/{id}` |
+| `/campaigns` | campaign | `POST /`, `GET /`, `POST /activate`, `POST /execute/{workflow_id}`, `GET /executions/{id}`, `GET /executions/{id}/retry-history`, `POST /{id}/pause`, `POST /{id}/resume`, `GET /{id}/schedule-status`, `GET /{id}/metrics` (incl. `failed_executions`), `GET /{id}/retries`, `GET|POST /{id}/voicemail`, `GET|PATCH|DELETE /{id}` |
 | `/livekit` | livekit | `POST /rooms`, `GET /rooms`, `GET /rooms/{name}`, `DELETE /rooms/{name}`, `POST /tokens`, `GET /sessions/{room_name}` |
 | `/tts` | tts | `GET /voices`, `POST /speak` |
 | `/stt` | stt | `POST /transcribe` (joins a LiveKit room as a Deepgram subscriber for N seconds, returns events) |
@@ -667,6 +688,20 @@ If SMTP isn't fully configured, `mailer.py` logs a warning and skips sending —
 | `TWILIO_PUBLIC_BASE_URL` | **for production** | `""` | Fully-qualified URL used in `voice_url` / `status_callback` registered with Twilio. If empty, falls back to `request.url.netloc` — won't work behind a private host. |
 | `TWILIO_VALIDATE_SIGNATURE` | recommend `true` in prod | `false` | When false, webhooks accept any signature. `main.py` emits `app.startup.unsafe` if `ENV=production` and this is false. |
 | `TWILIO_STATUS_CALLBACK_EVENTS` | no | `initiated,ringing,answered,completed` | Subset of Twilio call lifecycle events to receive. |
+| `TWILIO_AMD_ENABLED` | no | `true` | Master switch for Answering Machine Detection (required for voicemail drop). |
+| `LIVEKIT_SIP_URI` | for SIP bridge | `""` | LiveKit SIP host; Twilio `<Dial><Sip>` bridges the PSTN leg into the agent room. |
+| `LIVEKIT_SIP_OUTBOUND_TRUNK_ID` | no | `""` | When set (and AMD off), origination uses LiveKit `CreateSIPParticipant` instead of Twilio. AMD calls always force the Twilio path. |
+
+### Campaign dialing & scheduler
+
+| Var | Required | Default | Purpose |
+|---|---|---|---|
+| `CAMPAIGN_TELEPHONY_DIALING_ENABLED` | no | `false` | When `true`, the worker places a **real** outbound call per campaign lead via `TelephonyService.initiate_outbound`. When `false`, executions run the legacy in-process LLM-plan stub. (Set `true` in `backend/.env` for live dialing.) |
+| `CELERY_BROKER_URL` | no | falls back to `REDIS_URL` | Broker for the scheduler tick. |
+| `CELERY_RESULT_BACKEND` | no | falls back to `REDIS_URL` | Result backend. |
+| `CAMPAIGN_SCHEDULER_INTERVAL_SECONDS` | no | `60.0` | Celery Beat tick cadence (activate due campaigns + paced dispatch). |
+| `CAMPAIGN_DEFAULT_CALLS_PER_HOUR` | no | `60` | Pacing fallback when a campaign omits its own (`0` = unlimited). |
+| `CAMPAIGN_DEFAULT_MAX_CONCURRENT_CALLS` | no | `5` | Concurrency fallback (`0` = unlimited). |
 
 ### Rate limiting
 
@@ -859,6 +894,7 @@ curl -sS -X POST -d 'CallSid=PROBE' \
 15. **Production safety guards.** `main.py` lifespan emits `app.startup.unsafe` errors when `ENV=production` and any of: `TWILIO_VALIDATE_SIGNATURE=false`, `TWILIO_ACCOUNT_SID` starts with `ACdummy`, or `JWT_SECRET` is shorter than 32 chars. `TwilioClient.create_call` raises `TelephonyConfigError` instead of mock-originating when the SID is a dummy and `ENV=production`.
 16. **Tenant isolation enforced at the row level.** Cross-tenant access to AI call transcripts, playbooks, telephony calls, campaigns, workflows and executions returns `404` (never `200` with empty data, never `500`). Audit log filters via the org's `Memberships` set; lower-role users only see their own audit rows.
 17. **Mobile-first responsive UI.** The shell uses an off-canvas drawer below `lg` with body-scroll-lock and Esc/route-change auto-close, plus global `overflow-x: hidden` and `max-width: 100%` safety nets. Wide content (tables, tab strips, permission matrices) uses `overflow-x-auto` + `min-w` rather than collapsing. Layout state for the drawer lives in `store/ui.ts` (Zustand) so any descendant can toggle without prop drilling. See §9.5.
+18. **Campaign dialing pipeline (campaign → scheduler → worker → telephony).** Activation (`CampaignService.activate`) only **enqueues** one `queued` Execution per lead (frozen lead+playbook context). A per-minute Celery Beat tick (`CampaignScheduler.tick`) auto-activates due campaigns and **paces** dispatch within business hours, then calls the in-process worker. `run_execution` (`modules/campaign/worker.py`) places a **real outbound call** via `TelephonyService.initiate_outbound` for any lead execution when `CAMPAIGN_TELEPHONY_DIALING_ENABLED` is on — creating a `telephony_calls` row, a LiveKit room + AI agent, and a Twilio Call SID (or a LiveKit SIP leg when an outbound trunk is configured and AMD is off). The execution is left `running`; its terminal outcome is **reconciled asynchronously** by the Twilio status webhook (`TelephonyService._reconcile_campaign_execution`), which runs the retry engine so metrics/retries advance. **No silent LLM fallback:** dial failures (telephony unavailable, Twilio/LiveKit errors, undiallable lead) mark the execution `failed` via `process_outcome` (retry scheduled when configured) and log `CAMPAIGN_DIAL_FAILED` / `CAMPAIGN_DIAL_EXCEPTION`. The legacy LLM-plan path only runs for non-dial (generic) executions or when dialing is disabled.
 
 ---
 
@@ -876,10 +912,10 @@ These are real items found while scanning the repo, not speculation.
 - **CORS allowlist is dev-only** (`main.py` allows `localhost:5173/5174` plus `localhost:20197`). Production frontend origins must be added.
 - **Two backend launch paths can race for the ngrok tunnel.** The pm2 entry `afficient-be` binds port **20158**, but the dev convention is `uvicorn ... --port 8001`. Only one can be live at a time, and the reserved ngrok URL (`handmade-agreed-dimple.ngrok-free.dev`) must be pointed at the matching port — otherwise Twilio webhooks fail and callers hear Twilio's default error message. See §12.I for the canonical dev wiring.
 - **`get_current_org` (`modules/auth/dependencies.py`) is a stub** that returns `{"organization":"current"}` regardless of the user. The AI / campaign / playbook modules sidestep this by reading `organization_id` directly from the tenant dict in their routers. Should be removed or made real.
-- **`run_execution` (`modules/campaign/worker.py`) runs synchronously inside the request thread.** Now async-correct and calls `OpenAIClient`, but still no background queue, despite Celery being in `requirements.txt`. Long-running campaigns will tie up workers.
+- **`run_execution` (`modules/campaign/worker.py`) still runs in-process** (driven by the Celery Beat scheduler tick / request handler), not as a distributed task per call. Fine for current pacing, but a high-throughput campaign relies on the tick cadence + pacing budget rather than a fan-out worker pool.
 - **Duplicate `get_db`** helpers in `database/session.py` and `database/dependencies.py`.
 - **`prometheus-fastapi-instrumentator` is in `requirements.txt` but is not registered** in `main.py`.
-- **`celery` is in `requirements.txt` but there are no Celery tasks or worker process.**
+- **Celery Beat tick must be running for scheduled/paced dialing.** `modules/campaign/{celery_app,tasks}.py` define the `campaign.scheduler_tick` task; if no Celery worker+beat is running, campaigns still activate (which enqueues executions) but paced auto-dispatch won't fire. See `scripts/ensure-scheduler.sh`.
 - **JWT uses `datetime.utcnow()`** which is deprecated in Python 3.12; should migrate to `datetime.now(timezone.utc)`.
 - **`backend/next-app/`** appears unused (no source, only config files).
 - **`/ai/generate` and `/ai/converse` do not stream responses to the HTTP client** even though the underlying `OpenAIClient` supports streaming (`stream_collected`). The orchestrator uses streaming internally for TTFT, but the public REST endpoints buffer the full reply. Add SSE/chunked endpoints if the frontend wants token-by-token rendering.
@@ -899,6 +935,8 @@ These are real items found while scanning the repo, not speculation.
 
 ### Resolved (kept for trace, do not re-open without re-checking)
 
+- ~~Launching a campaign placed no real calls (worker ran the LLM stub).~~ Root cause: `worker._campaign_dial_context` referenced `campaign.created_by`, a column the `Campaign` model doesn't have; the `AttributeError` was swallowed by the dial `try/except`, silently falling back to the LLM plan on every lead. Fixed (`created_by=None`); dialing now reaches `TelephonyService.initiate_outbound`. Covered by `tests/api/test_campaign_dialing_e2e.py`.
+- ~~Dial failures silently completed via the LLM fallback.~~ Removed. Dial candidates never fall back to the LLM: failures mark the execution `failed` via the retry engine (retry scheduled when configured), log `CAMPAIGN_DIAL_FAILED` / `CAMPAIGN_DIAL_EXCEPTION`, and surface in metrics (`failed_calls`, new `failed_executions`). Covered by the telephony-unavailable / Twilio / LiveKit / invalid-phone cases in `tests/api/test_campaign_dialing_e2e.py`.
 - ~~`AIProvider.generate` is a stub.~~ Replaced; `modules/ai/provider.py` now delegates to `OpenAIClient.agenerate`. The legacy `AIService.execute(prompt)` shim is preserved for the campaign worker.
 - ~~No real LLM integration.~~ Full GPT-4o engine landed: `/ai/generate`, `/ai/converse`, BANT/MEDDICC qualification, Redis memory, Postgres transcripts and summaries, live orchestrator.
 - ~~Transcripts page uses mock data only.~~ Now backed by `GET /ai/calls` + `GET /ai/calls/{id}/transcript`.
@@ -960,3 +998,5 @@ If something is genuinely unclear from reading the code, write **"Not clearly de
 *2026-06-02 — added §12.I (Twilio webhook / ngrok wiring) and a §14 note covering the pm2-20158 vs uvicorn-8001 port mismatch that caused "We're sorry, an application error has occurred." on inbound calls. Dev convention is now: ngrok `handmade-agreed-dimple.ngrok-free.dev` → uvicorn on port `8001`; keep pm2 `afficient-be` stopped while running dev uvicorn.*
 
 *2026-06-02 — frontend responsive overhaul: every page and the layout shell now adapts cleanly from 360px phones up through 4K desktops. New `store/ui.ts` Zustand store drives an off-canvas mobile drawer; `Sidebar` and `Header` were refactored to consume it. Added global `overflow-x: hidden` / `max-width: 100%` safety nets in `index.css`. Tables and tab strips use horizontal scroll instead of collapsing. New documentation section: `pages/Documentation.tsx` mounted at `/documentation` (protected), reachable from the avatar dropdown in `Header.tsx`. See new §9.5 (Responsive Design) and updated §3/§4/§5/§6/§13.*
+
+*2026-06-05 — campaign dialing pipeline audit + fix. (1) Root cause of "campaign launches but no calls": `worker._campaign_dial_context` referenced a non-existent `Campaign.created_by`; the `AttributeError` was swallowed by the dial `try/except`, silently falling back to the LLM stub on every lead. Fixed to `created_by=None`, so activation → scheduler → worker now actually calls `TelephonyService.initiate_outbound` (Twilio Call SID or LiveKit SIP leg, `telephony_calls` populated, status webhooks reconcile outcomes). (2) Removed the silent LLM fallback for dial failures: lead executions now fail via the retry engine (retry scheduled when configured) and log `CAMPAIGN_DIAL_FAILED` / `CAMPAIGN_DIAL_EXCEPTION`; the LLM-plan path is reserved for non-dial/generic executions or when dialing is disabled. (3) Added `failed_executions` to campaign metrics. New env var `CAMPAIGN_TELEPHONY_DIALING_ENABLED` (default false; `true` in `backend/.env`). New tests: `tests/api/test_campaign_dialing_e2e.py` (success Twilio + LiveKit-SIP paths, telephony-unavailable, Twilio failure, LiveKit failure, invalid phone). See updated §1/§3/§4/§11/§13/§14.*
