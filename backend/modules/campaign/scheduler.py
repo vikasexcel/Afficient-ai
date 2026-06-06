@@ -22,9 +22,8 @@ flips them back to ``active`` so the next tick picks them up again.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import case, func, select, update
 from sqlalchemy.orm import Session
 
 from common.logging import get_logger
@@ -36,12 +35,7 @@ from modules.campaign.model import (
     CAMPAIGN_STATUS_SCHEDULED,
     Campaign,
 )
-from modules.campaign.retry import (
-    RETRY_STATUS_COMPLETED,
-    RETRY_STATUS_EXHAUSTED,
-    RETRY_STATUS_PENDING,
-    RETRY_STATUS_SCHEDULED,
-)
+from modules.campaign.repository import ExecutionRepository, WorkflowRepository
 from modules.campaign.scheduling import (
     is_within_business_hours,
     next_business_window,
@@ -97,51 +91,17 @@ class CampaignScheduler:
     # ------------------------------------------------------------------ #
 
     @staticmethod
-    def _exec_query(db: Session, campaign_id):
-        """Base select of executions belonging to a campaign (any workflow)."""
-
-        return (
-            select(Execution)
-            .join(Workflow, Workflow.id == Execution.workflow_id)
-            .where(Workflow.campaign_id == campaign_id)
-        )
-
-    @staticmethod
     def _status_counts(db: Session, campaign_id) -> dict[str, int]:
-        rows = db.execute(
-            select(Execution.status, func.count())
-            .join(Workflow, Workflow.id == Execution.workflow_id)
-            .where(Workflow.campaign_id == campaign_id)
-            .group_by(Execution.status)
-        ).all()
-        return {status: int(count) for status, count in rows}
+        return ExecutionRepository.count_by_status(db, campaign_id)
 
     @staticmethod
     def _dispatched_last_hour(db: Session, campaign_id, now: datetime) -> int:
         cutoff = now - timedelta(hours=1)
-        return int(
-            db.execute(
-                select(func.count())
-                .select_from(Execution)
-                .join(Workflow, Workflow.id == Execution.workflow_id)
-                .where(
-                    Workflow.campaign_id == campaign_id,
-                    Execution.status != EXEC_QUEUED,
-                    Execution.updated_at >= cutoff,
-                )
-            ).scalar_one()
-        )
+        return ExecutionRepository.count_dispatched_since(db, campaign_id, cutoff)
 
     @staticmethod
     def _active_workflow(db: Session, campaign_id) -> Workflow | None:
-        return db.execute(
-            select(Workflow)
-            .where(
-                Workflow.campaign_id == campaign_id,
-                Workflow.state == "active",
-            )
-            .order_by(Workflow.created_at.desc())
-        ).scalars().first()
+        return WorkflowRepository.get_active_for_campaign(db, campaign_id)
 
     # ------------------------------------------------------------------ #
     # Retry bookkeeping
@@ -150,18 +110,7 @@ class CampaignScheduler:
     @staticmethod
     def _scheduled_retry_count(db: Session, campaign_id) -> int:
         """Executions parked waiting for a future retry (any time)."""
-
-        return int(
-            db.execute(
-                select(func.count())
-                .select_from(Execution)
-                .join(Workflow, Workflow.id == Execution.workflow_id)
-                .where(
-                    Workflow.campaign_id == campaign_id,
-                    Execution.retry_status == RETRY_STATUS_SCHEDULED,
-                )
-            ).scalar_one()
-        )
+        return ExecutionRepository.count_scheduled_retries(db, campaign_id)
 
     @staticmethod
     def _requeue_due_retries(
@@ -174,27 +123,7 @@ class CampaignScheduler:
         window so retries respect the calling schedule. Pacing and concurrency
         are enforced afterwards by the normal paced-dispatch step.
         """
-
-        workflow_ids = select(Workflow.id).where(
-            Workflow.campaign_id == campaign_id
-        )
-        stmt = (
-            update(Execution)
-            .where(
-                Execution.workflow_id.in_(workflow_ids),
-                Execution.retry_status == RETRY_STATUS_SCHEDULED,
-                Execution.next_retry_at.is_not(None),
-                Execution.next_retry_at <= now,
-            )
-            .values(
-                status=EXEC_QUEUED,
-                retry_status=RETRY_STATUS_PENDING,
-                next_retry_at=None,
-            )
-            .execution_options(synchronize_session=False)
-        )
-        result = db.execute(stmt)
-        requeued = int(result.rowcount or 0)
+        requeued = ExecutionRepository.requeue_due_retries(db, campaign_id, now)
         if requeued:
             db.commit()
         return requeued
@@ -202,67 +131,7 @@ class CampaignScheduler:
     @staticmethod
     def _retry_stats(db: Session, campaign_id) -> dict:
         """Aggregate retry counters for a campaign in a single query."""
-
-        retried = case((Execution.attempt_number > 1, 1), else_=0)
-        scheduled = case(
-            (Execution.retry_status == RETRY_STATUS_SCHEDULED, 1), else_=0
-        )
-        exhausted = case(
-            (Execution.retry_status == RETRY_STATUS_EXHAUSTED, 1), else_=0
-        )
-        succeeded = case(
-            (
-                (Execution.retry_status == RETRY_STATUS_COMPLETED)
-                & (Execution.attempt_number > 1),
-                1,
-            ),
-            else_=0,
-        )
-
-        row = db.execute(
-            select(
-                func.count(),
-                func.coalesce(func.sum(Execution.attempt_number), 0),
-                func.coalesce(func.sum(retried), 0),
-                func.coalesce(func.sum(scheduled), 0),
-                func.coalesce(func.sum(exhausted), 0),
-                func.coalesce(func.sum(succeeded), 0),
-            )
-            .select_from(Execution)
-            .join(Workflow, Workflow.id == Execution.workflow_id)
-            .where(Workflow.campaign_id == campaign_id)
-        ).one()
-
-        total, sum_attempts, retried_n, pending_n, exhausted_n, success_n = (
-            int(row[0]),
-            int(row[1]),
-            int(row[2]),
-            int(row[3]),
-            int(row[4]),
-            int(row[5]),
-        )
-
-        # Total retry *attempts* beyond the first dial across the campaign.
-        total_retries = max(0, sum_attempts - total)
-        avg_attempts = round(sum_attempts / total, 2) if total else 0.0
-        # Success rate among retried executions that reached a terminal state.
-        terminal_retried = success_n + exhausted_n
-        success_rate = (
-            round(success_n / terminal_retried, 3)
-            if terminal_retried
-            else 0.0
-        )
-
-        return {
-            "total_executions": total,
-            "retried_executions": retried_n,
-            "total_retries": total_retries,
-            "pending_retries": pending_n,
-            "exhausted_retries": exhausted_n,
-            "successful_retries": success_n,
-            "retry_success_rate": success_rate,
-            "average_attempts_per_call": avg_attempts,
-        }
+        return ExecutionRepository.retry_stats(db, campaign_id)
 
     @staticmethod
     def retries(db: Session, campaign: Campaign) -> dict:
@@ -334,13 +203,16 @@ class CampaignScheduler:
 
         total_leads = 0
         if campaign.lead_list_id is not None:
-            from modules.leads.model import Lead
+            from modules.leads.model import lead_list_memberships
 
             total_leads = int(
                 db.execute(
                     select(func.count())
-                    .select_from(Lead)
-                    .where(Lead.lead_list_id == campaign.lead_list_id)
+                    .select_from(lead_list_memberships)
+                    .where(
+                        lead_list_memberships.c.lead_list_id
+                        == campaign.lead_list_id
+                    )
                 ).scalar_one()
             )
 
@@ -390,7 +262,7 @@ class CampaignScheduler:
 
     @staticmethod
     def schedule_status(db: Session, campaign: Campaign) -> dict:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         within = is_within_business_hours(
             campaign.business_hours, campaign.timezone, now
         )
@@ -436,7 +308,7 @@ class CampaignScheduler:
     ) -> dict:
         """Advance every campaign one step. Returns a summary for logging."""
 
-        now = now or datetime.utcnow()
+        now = now or datetime.now(timezone.utc)
         dispatcher = dispatcher or _default_dispatcher
 
         activated = CampaignScheduler._activate_due(db, now)
@@ -555,16 +427,8 @@ class CampaignScheduler:
             if workflow is None:
                 continue
 
-            batch = list(
-                db.execute(
-                    select(Execution)
-                    .where(
-                        Execution.workflow_id == workflow.id,
-                        Execution.status == EXEC_QUEUED,
-                    )
-                    .order_by(Execution.created_at.asc())
-                    .limit(allowance)
-                ).scalars()
+            batch = ExecutionRepository.list_queued(
+                db, workflow.id, limit=allowance, now=now
             )
             if not batch:
                 continue

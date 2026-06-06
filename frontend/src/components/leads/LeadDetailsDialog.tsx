@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  CalendarClock,
+  Briefcase,
+  Building2,
+  ExternalLink,
   Loader2,
   Mail,
   Pencil,
   Phone,
   PhoneCall,
-  Plus,
-  StickyNote,
+  Tag,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -21,282 +22,237 @@ import {
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { formatApiError } from "@/lib/apiError";
-import {
-  getLead,
-  listLeadActivities,
-  listLeadLists,
-} from "@/services/lead";
-import type {
-  ActivityType,
-  Lead,
-  LeadActivity,
-  LeadStatus,
-} from "@/types/lead";
+import { getLead } from "@/services/lead";
+import { leadFullName } from "@/types/lead";
+import type { Lead, LeadStatus } from "@/types/lead";
 
-const STATUS_LABELS: Record<LeadStatus, string> = {
-  new: "New",
-  contacted: "Contacted",
-  qualified: "Qualified",
-  converted: "Converted",
-  lost: "Lost",
-};
-
-const ACTIVITY_META: Record<
-  ActivityType,
-  { label: string; icon: typeof Phone }
-> = {
-  call: { label: "Call", icon: Phone },
-  email: { label: "Email", icon: Mail },
-  meeting: { label: "Meeting", icon: CalendarClock },
-  note: { label: "Note", icon: StickyNote },
-};
+const STATUS_STYLES: Record<LeadStatus, { label: string; className: string }> =
+  {
+    new: {
+      label: "New",
+      className: "bg-sky-500/10 text-sky-300 border-sky-500/20",
+    },
+    contacted: {
+      label: "Contacted",
+      className: "bg-amber-500/10 text-amber-300 border-amber-500/25",
+    },
+    qualified: {
+      label: "Qualified",
+      className: "bg-violet-500/10 text-violet-300 border-violet-500/25",
+    },
+    converted: {
+      label: "Converted",
+      className: "bg-emerald-500/10 text-emerald-300 border-emerald-500/25",
+    },
+    lost: {
+      label: "Lost",
+      className: "bg-red-500/10 text-red-300 border-red-500/25",
+    },
+  };
 
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   lead: Lead | null;
-  /** Bump to force the activity timeline to refetch. */
   refreshKey?: number;
   callDisabled?: boolean;
   onEdit?: (lead: Lead) => void;
-  onLogActivity?: (lead: Lead) => void;
   onStartCall?: (lead: Lead) => void;
 };
-
-function fmtDate(value: string | null | undefined): string {
-  if (!value) return "—";
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString();
-}
 
 export default function LeadDetailsDialog({
   open,
   onOpenChange,
-  lead,
-  refreshKey = 0,
-  callDisabled = false,
+  lead: initialLead,
+  refreshKey,
+  callDisabled,
   onEdit,
-  onLogActivity,
   onStartCall,
 }: Props) {
-  const [detail, setDetail] = useState<Lead | null>(lead);
-  const [activities, setActivities] = useState<LeadActivity[]>([]);
+  const [lead, setLead] = useState<Lead | null>(initialLead);
   const [loading, setLoading] = useState(false);
-  const [listName, setListName] = useState<string | null>(null);
 
-  const loadDetails = useCallback(async () => {
-    if (!lead) return;
+  const fetchLead = useCallback(async () => {
+    if (!initialLead) return;
     setLoading(true);
     try {
-      const [fresh, acts] = await Promise.all([
-        getLead(lead.id),
-        listLeadActivities(lead.id),
-      ]);
-      setDetail(fresh);
-      setActivities(acts);
+      const fresh = await getLead(initialLead.id);
+      setLead(fresh);
     } catch (err) {
-      setActivities([]);
       toast.error(formatApiError(err, "Could not load lead details"));
-      onOpenChange(false);
     } finally {
       setLoading(false);
     }
-  }, [lead, onOpenChange]);
+  }, [initialLead]);
 
   useEffect(() => {
-    if (open && lead) {
-      setDetail(lead);
-      void loadDetails();
-    }
-  }, [open, lead, refreshKey, loadDetails]);
+    if (open && initialLead) void fetchLead();
+  }, [open, initialLead, refreshKey, fetchLead]);
 
-  // Resolve the lead list name for display.
-  useEffect(() => {
-    if (!open || !lead?.lead_list_id) {
-      setListName(null);
-      return;
-    }
-    void listLeadLists()
-      .then((lists) => {
-        const match = lists.find((l) => l.id === lead.lead_list_id);
-        setListName(match?.name ?? null);
-      })
-      .catch(() => setListName(null));
-  }, [open, lead]);
+  if (!lead) return null;
 
-  const shown = detail ?? lead;
-  if (!shown) return null;
-
-  const lastActivity = activities[0]?.created_at ?? null;
-  const customEntries = Object.entries(shown.custom_fields ?? {});
+  const status = STATUS_STYLES[lead.status];
+  const fullName = leadFullName(lead);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="sm:max-w-2xl p-0 gap-0 bg-[#0c0c10] border border-white/[0.08] max-h-[85vh] overflow-hidden flex flex-col"
+        className="sm:max-w-md p-0 gap-0 bg-[#0c0c10] border border-white/[0.08]"
         showCloseButton
       >
         <DialogHeader className="px-5 pt-5 pb-4 border-b border-white/[0.06]">
-          <DialogTitle className="text-[16px] text-white">
-            {shown.name}
-          </DialogTitle>
-          <DialogDescription className="text-[12px] text-white/45 mt-0.5">
-            {shown.company ?? "No company"} · {STATUS_LABELS[shown.status]}
-          </DialogDescription>
-
-          <div className="flex flex-wrap items-center gap-2 mt-3">
-            <Button
-              size="xs"
-              variant="outline"
-              className="border-white/[0.1] bg-white/[0.02] text-white/85 hover:bg-white/[0.06]"
-              onClick={() => onEdit?.(shown)}
-            >
-              <Pencil size={12} />
-              Edit
-            </Button>
-            <Button
-              size="xs"
-              variant="outline"
-              className="border-white/[0.1] bg-white/[0.02] text-white/85 hover:bg-white/[0.06]"
-              onClick={() => onLogActivity?.(shown)}
-            >
-              <Plus size={12} />
-              Log activity
-            </Button>
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={callDisabled}
-              title={
-                callDisabled ? "Calling functionality coming soon" : undefined
-              }
-              className="border-white/[0.1] bg-white/[0.02] text-white/85 hover:bg-white/[0.06]"
-              onClick={() => onStartCall?.(shown)}
-            >
-              <PhoneCall size={12} />
-              Start call
-            </Button>
+          <div className="flex items-start gap-3">
+            <div className="h-10 w-10 shrink-0 rounded-full bg-white/[0.06] border border-white/[0.08] flex items-center justify-center text-[13px] font-medium text-white/80">
+              {fullName
+                .split(" ")
+                .map((p) => p[0])
+                .join("")
+                .slice(0, 2)
+                .toUpperCase()}
+            </div>
+            <div className="min-w-0 flex-1">
+              <DialogTitle className="text-[15px] text-white truncate">
+                {fullName}
+              </DialogTitle>
+              <div className="flex items-center gap-2 mt-1">
+                <span
+                  className={cn(
+                    "inline-flex items-center h-5 px-2 rounded-full border text-[11px] font-medium",
+                    status.className
+                  )}
+                >
+                  {status.label}
+                </span>
+                {lead.company && (
+                  <span className="text-[12px] text-white/45 truncate">
+                    {lead.company}
+                  </span>
+                )}
+              </div>
+            </div>
+            {loading && (
+              <Loader2 size={14} className="animate-spin text-white/40 mt-1" />
+            )}
           </div>
+          <DialogDescription className="sr-only">
+            Lead details for {fullName}
+          </DialogDescription>
         </DialogHeader>
 
-        <div className="overflow-y-auto px-5 py-4 space-y-5">
-          <section className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
-            <Detail label="Name" value={shown.name} />
-            <Detail label="Email" value={shown.email} />
-            <Detail label="Phone" value={shown.phone} />
-            <Detail label="Company" value={shown.company} />
-            <Detail label="Industry" value={shown.industry} />
-            <Detail label="Status" value={STATUS_LABELS[shown.status]} />
-            <Detail label="Lead list" value={listName} />
-            <Detail label="Created" value={fmtDate(shown.created_at)} />
-            <Detail label="Last activity" value={fmtDate(lastActivity)} />
-            <div className="sm:col-span-2">
-              <FieldLabel>Tags</FieldLabel>
-              {shown.tags && shown.tags.length > 0 ? (
-                <div className="flex flex-wrap gap-1.5 mt-1">
-                  {shown.tags.map((t) => (
+        <div className="px-5 py-4 space-y-3">
+          <InfoRow icon={Phone} label="Phone" value={lead.phone} />
+          <InfoRow icon={Mail} label="Email" value={lead.email ?? "—"} />
+          <InfoRow
+            icon={Briefcase}
+            label="Job title"
+            value={lead.job_title ?? "—"}
+          />
+          <InfoRow
+            icon={Building2}
+            label="Company"
+            value={lead.company ?? "—"}
+          />
+
+          {lead.linkedin_url && (
+            <div className="flex items-start gap-2.5">
+              <div className="mt-0.5 h-7 w-7 shrink-0 rounded-[7px] bg-white/[0.04] border border-white/[0.06] flex items-center justify-center">
+                <ExternalLink size={12} className="text-white/45" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-[10.5px] text-white/40 uppercase tracking-wider mb-0.5">
+                  LinkedIn
+                </div>
+                <a
+                  href={lead.linkedin_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[12px] text-violet-300 hover:text-violet-200 truncate block"
+                >
+                  {lead.linkedin_url}
+                </a>
+              </div>
+            </div>
+          )}
+
+          {lead.tags && lead.tags.length > 0 && (
+            <div className="flex items-start gap-2.5">
+              <div className="mt-0.5 h-7 w-7 shrink-0 rounded-[7px] bg-white/[0.04] border border-white/[0.06] flex items-center justify-center">
+                <Tag size={12} className="text-white/45" />
+              </div>
+              <div>
+                <div className="text-[10.5px] text-white/40 uppercase tracking-wider mb-1">
+                  Tags
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {lead.tags.map((tag) => (
                     <span
-                      key={t}
-                      className="inline-flex items-center h-5 px-2 rounded-full border border-white/[0.1] bg-white/[0.04] text-[11px] text-white/75"
+                      key={tag}
+                      className="inline-flex items-center h-5 px-2 rounded-full bg-white/[0.05] border border-white/[0.08] text-[11px] text-white/70"
                     >
-                      {t}
+                      {tag}
                     </span>
                   ))}
                 </div>
-              ) : (
-                <p className="text-[13px] text-white/45 mt-0.5">—</p>
-              )}
-            </div>
-          </section>
-
-          {customEntries.length > 0 && (
-            <section>
-              <FieldLabel>Custom fields</FieldLabel>
-              <div className="mt-1.5 rounded-[8px] border border-white/[0.07] divide-y divide-white/[0.05]">
-                {customEntries.map(([k, v]) => (
-                  <div
-                    key={k}
-                    className="flex items-center justify-between gap-3 px-3 py-1.5"
-                  >
-                    <span className="text-[12px] text-white/50">{k}</span>
-                    <span className="text-[12px] text-white/85 truncate">
-                      {String(v)}
-                    </span>
-                  </div>
-                ))}
               </div>
-            </section>
+            </div>
           )}
 
-          <section>
-            <FieldLabel>Activity history</FieldLabel>
-            {loading ? (
-              <div className="py-6 flex items-center justify-center text-white/45 text-[12px]">
-                <Loader2 size={14} className="animate-spin mr-2" />
-                Loading…
-              </div>
-            ) : activities.length === 0 ? (
-              <p className="text-[12px] text-white/40 mt-2">
-                No activity logged yet.
-              </p>
-            ) : (
-              <ol className="mt-2 space-y-2.5">
-                {activities.map((a) => {
-                  const meta = ACTIVITY_META[a.activity_type];
-                  const Icon = meta.icon;
-                  return (
-                    <li key={a.id} className="flex gap-2.5">
-                      <div className="h-7 w-7 shrink-0 rounded-full bg-white/[0.04] border border-white/[0.08] flex items-center justify-center text-white/65">
-                        <Icon size={12} />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-[12.5px] text-white font-medium">
-                            {meta.label}
-                          </span>
-                          <span className="text-[11px] text-white/40">
-                            {fmtDate(a.created_at)}
-                          </span>
-                        </div>
-                        {a.notes && (
-                          <p className="text-[12px] text-white/65 mt-0.5 whitespace-pre-wrap break-words">
-                            {a.notes}
-                          </p>
-                        )}
-                      </div>
-                    </li>
-                  );
-                })}
-              </ol>
-            )}
-          </section>
+          <div className="text-[11px] text-white/35 pt-1">
+            Added {new Date(lead.created_at).toLocaleDateString()}
+          </div>
+        </div>
+
+        <div className="px-5 pb-5 flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            className="flex-1 border-white/[0.08] text-white/70 hover:text-white hover:bg-white/[0.04]"
+            onClick={() => {
+              onEdit?.(lead);
+              onOpenChange(false);
+            }}
+          >
+            <Pencil size={13} />
+            Edit
+          </Button>
+          <Button
+            size="sm"
+            disabled={callDisabled}
+            className="flex-1 bg-violet-600 hover:bg-violet-500 text-white disabled:opacity-40"
+            onClick={() => {
+              onStartCall?.(lead);
+              onOpenChange(false);
+            }}
+          >
+            <PhoneCall size={13} />
+            Call
+          </Button>
         </div>
       </DialogContent>
     </Dialog>
   );
 }
 
-function Detail({
+function InfoRow({
+  icon: Icon,
   label,
   value,
 }: {
+  icon: typeof Phone;
   label: string;
-  value: string | null | undefined;
+  value: string;
 }) {
   return (
-    <div>
-      <FieldLabel>{label}</FieldLabel>
-      <p className={cn("text-[13px] mt-0.5", value ? "text-white/85" : "text-white/45")}>
-        {value || "—"}
-      </p>
+    <div className="flex items-start gap-2.5">
+      <div className="mt-0.5 h-7 w-7 shrink-0 rounded-[7px] bg-white/[0.04] border border-white/[0.06] flex items-center justify-center">
+        <Icon size={12} className="text-white/45" />
+      </div>
+      <div className="min-w-0">
+        <div className="text-[10.5px] text-white/40 uppercase tracking-wider mb-0.5">
+          {label}
+        </div>
+        <div className="text-[13px] text-white/85 truncate">{value}</div>
+      </div>
     </div>
-  );
-}
-
-function FieldLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="text-[10.5px] font-medium text-white/45 uppercase tracking-wider">
-      {children}
-    </span>
   );
 }

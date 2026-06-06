@@ -19,7 +19,8 @@ Current state of features (as observed in code):
 - **Playbooks** — full CRUD, publish/archive/duplicate, versioned snapshots, dry-run `/test`, declarative branch rules with strict `when`-key allowlist. Drives prompts + qualification on AI calls.
 - Campaigns / workflows / executions — **wired end-to-end** including a real **dialing pipeline**: activation enqueues per-lead executions, the `CampaignScheduler` (Celery Beat) paces dispatch within business hours, and the worker places real outbound calls via `TelephonyService` (gated by `CAMPAIGN_TELEPHONY_DIALING_ENABLED`). Retry engine, AMD/voicemail-drop, and pacing are implemented. Dial failures fail the execution (no silent LLM fallback). Auth + tenant-scoping enforced on `/campaigns/*`.
 - **Telephony (Twilio + LiveKit SIP)** — outbound originate + status/voice webhooks + `<Dial><Sip>` bridge, Answering Machine Detection + voicemail drop, and reconciliation of terminal call outcomes back onto campaign executions. Mock-origination path explicitly **refuses to run when `ENV=production`**.
-- Frontend **Calls** and **Transcripts** pages — **wired to the live backend** (GPT-4o chat, Deepgram transcribe smoke, real transcripts + summaries). **Leads** and **Analytics** pages remain UI-only with mock data.
+- Frontend **Calls** and **Transcripts** pages — **wired to the live backend** (GPT-4o chat, Deepgram transcribe smoke, real transcripts + summaries). **Analytics** page remains UI-only with mock data.
+- **Leads** — full Phase 1 Lead Management implemented end-to-end: backend module (`modules/leads/`), migration, and frontend wired to real APIs. See §4 for module details.
 - **Test suite** — 29 pytest cases under `backend/tests/` cover auth, audit scoping, password rules, campaign worker, playbook branches, tenant isolation, rate limit, Twilio prod guard. Run with `pytest tests/`.
 
 ---
@@ -100,10 +101,13 @@ afficient-ai/
 │   │   └── models.py               (aggregator)
 │   │
 │   ├── migrations/                 Alembic
-│   │   └── versions/               13 revisions: init -> users/orgs -> sessions ->
+│   │   └── versions/               20+ revisions: init -> users/orgs -> sessions ->
 │   │                               memberships -> audit_logs -> role enum -> campaigns ->
 │   │                               workflows -> executions -> exec output -> membership
-│   │                               status -> livekit_sessions -> ai_tables
+│   │                               status -> livekit_sessions -> ai_tables ->
+│   │                               telephony -> playbook chain -> leads -> lead_activities ->
+│   │                               extend_campaigns -> retry -> amd_voicemail ->
+│   │                               rebuild_leads (Phase 1)
 │   │                               (ai_calls, ai_transcript_entries, ai_call_summaries)
 │   │
 │   ├── common/
@@ -278,6 +282,7 @@ afficient-ai/
 | `auth` | Register, login, `/me`, refresh, logout, audit log | `modules/auth/*` |
 | `organization` | Read/rename/transfer-ownership/delete current tenant | `modules/organization/router.py` |
 | `members` | Org membership CRUD + temp-password reset + invitation email | `modules/members/*` |
+| `leads` | Phase 1 Lead Management: org-scoped `Lead` + `LeadList` (many-to-many via `lead_list_memberships`). Full CRUD + search + pagination + duplicate detection (`phone_normalized`). Audit logs: `LEAD_CREATED`, `LEAD_UPDATED`, `LEAD_DELETED`, `LEAD_LIST_CREATED`. Lead fields: `first_name`, `last_name`, `email`, `phone`, `linkedin_url`, `company`, `job_title`, `status`, `tags`, `extra_data`. | `modules/leads/*` |
 | `campaign` | Campaign → Workflow → Execution chain. Activation enqueues one queued `Execution` per lead; the `CampaignScheduler` tick (Celery Beat) paces dispatch within business hours; the worker places a **real outbound call** via `TelephonyService` (Twilio/LiveKit SIP) per lead when `CAMPAIGN_TELEPHONY_DIALING_ENABLED`. Retry engine + AMD/voicemail-drop + pacing supported. | `modules/campaign/*` |
 | `telephony` | Outbound/inbound PSTN via Twilio + LiveKit SIP. `initiate_outbound` creates a `telephony_calls` row + LiveKit room + AI agent, originates the call, and reconciles the terminal status webhook back onto the linked campaign execution. | `modules/telephony/*` |
 | `playbook` | Playbook CRUD, versioned snapshots, publish/archive/duplicate, call-apply (persona/framework/voice/opening line) | `modules/playbook/*` |
@@ -305,7 +310,7 @@ afficient-ai/
 | Dashboard | placeholder | `pages/Dashboard.tsx` |
 | Campaigns | minimal CRUD UI, dialog for create | `pages/Campaigns.tsx`, `services/campaign.ts` |
 | Calls | LiveKit join/disconnect, mic toggle, persona picker, GPT-4o assistant panel (live converse + BANT chips + Finalize summary), Deepgram "Live transcribe" smoke widget | `pages/Calls.tsx`, `store/livekit.ts`, `store/ai.ts`, `services/ai.ts`, `services/stt.ts` |
-| Leads | **mock data only** | `pages/Leads.tsx` |
+| Leads | **wired to backend** — real CRUD (add/edit/delete/search), paginated list, Lead + LeadList management | `pages/Leads.tsx`, `services/lead.ts`, `types/lead.ts`, `components/leads/` |
 | Analytics | **mock data only** | `pages/Analytics.tsx` |
 | Transcripts | Real calls from `GET /ai/calls`, per-call transcript from `GET /ai/calls/{id}/transcript`, summary + qualification, finalize + export JSON | `pages/Transcripts.tsx`, `services/ai.ts` |
 | Settings | tabs: Members, Organization, Profile, Appearance, Security | gated by role via `store/me.ts` helpers |
@@ -348,6 +353,8 @@ Backend routes are mounted under `settings.API_PREFIX` (default `/api/v1`):
 | `/auth` | auth | `POST /register`, `POST /login`, `GET /me`, `POST /refresh`, `POST /logout`, `GET /audit`, `GET /tenant`, `GET /admin` |
 | `/organization` | organization | `GET /`, `PATCH /`, `POST /transfer-ownership`, `DELETE /` |
 | `/members` | members | `GET /`, `POST /`, `PATCH /{id}/role`, `POST /{id}/reset-password`, `DELETE /{id}` |
+| `/leads` | leads | `POST /`, `GET /`, `GET /{id}`, `PATCH /{id}`, `DELETE /{id}` |
+| `/lead-lists` | leads | `GET /`, `POST /`, `PATCH /{id}`, `DELETE /{id}`, `POST /{id}/leads`, `DELETE /{id}/leads` |
 | `/campaigns` | campaign | `POST /`, `GET /`, `POST /activate`, `POST /execute/{workflow_id}`, `GET /executions/{id}`, `GET /executions/{id}/retry-history`, `POST /{id}/pause`, `POST /{id}/resume`, `GET /{id}/schedule-status`, `GET /{id}/metrics` (incl. `failed_executions`), `GET /{id}/retries`, `GET|POST /{id}/voicemail`, `GET|PATCH|DELETE /{id}` |
 | `/livekit` | livekit | `POST /rooms`, `GET /rooms`, `GET /rooms/{name}`, `DELETE /rooms/{name}`, `POST /tokens`, `GET /sessions/{room_name}` |
 | `/tts` | tts | `GET /voices`, `POST /speak` |
@@ -998,5 +1005,7 @@ If something is genuinely unclear from reading the code, write **"Not clearly de
 *2026-06-02 — added §12.I (Twilio webhook / ngrok wiring) and a §14 note covering the pm2-20158 vs uvicorn-8001 port mismatch that caused "We're sorry, an application error has occurred." on inbound calls. Dev convention is now: ngrok `handmade-agreed-dimple.ngrok-free.dev` → uvicorn on port `8001`; keep pm2 `afficient-be` stopped while running dev uvicorn.*
 
 *2026-06-02 — frontend responsive overhaul: every page and the layout shell now adapts cleanly from 360px phones up through 4K desktops. New `store/ui.ts` Zustand store drives an off-canvas mobile drawer; `Sidebar` and `Header` were refactored to consume it. Added global `overflow-x: hidden` / `max-width: 100%` safety nets in `index.css`. Tables and tab strips use horizontal scroll instead of collapsing. New documentation section: `pages/Documentation.tsx` mounted at `/documentation` (protected), reachable from the avatar dropdown in `Header.tsx`. See new §9.5 (Responsive Design) and updated §3/§4/§5/§6/§13.*
+
+*2026-06-06 — Phase 1 Lead Management implemented. Backend: `modules/leads/` rewritten with new schema (`first_name`, `last_name`, `email`, `phone`, `linkedin_url`, `company`, `job_title`, `status`, `tags`, `extra_data`); `Lead ↔ LeadList` is now many-to-many via `lead_list_memberships` join table (replacing the old direct FK); `lead_activities` removed from Phase 1; full CRUD + search + pagination + phone-dedup + audit logging (`LEAD_CREATED/UPDATED/DELETED/LEAD_LIST_CREATED`); `PATCH /lead-lists/{id}` and `DELETE /lead-lists/{id}` added; migration `o1p2q3r4s5t6_rebuild_leads` migrates the existing tables. Frontend: `types/lead.ts`, `services/lead.ts`, `pages/Leads.tsx`, `components/leads/LeadFormDialog.tsx`, `components/leads/LeadDetailsDialog.tsx` all updated for new field names. Leads page now wired to the real backend.*
 
 *2026-06-05 — campaign dialing pipeline audit + fix. (1) Root cause of "campaign launches but no calls": `worker._campaign_dial_context` referenced a non-existent `Campaign.created_by`; the `AttributeError` was swallowed by the dial `try/except`, silently falling back to the LLM stub on every lead. Fixed to `created_by=None`, so activation → scheduler → worker now actually calls `TelephonyService.initiate_outbound` (Twilio Call SID or LiveKit SIP leg, `telephony_calls` populated, status webhooks reconcile outcomes). (2) Removed the silent LLM fallback for dial failures: lead executions now fail via the retry engine (retry scheduled when configured) and log `CAMPAIGN_DIAL_FAILED` / `CAMPAIGN_DIAL_EXCEPTION`; the LLM-plan path is reserved for non-dial/generic executions or when dialing is disabled. (3) Added `failed_executions` to campaign metrics. New env var `CAMPAIGN_TELEPHONY_DIALING_ENABLED` (default false; `true` in `backend/.env`). New tests: `tests/api/test_campaign_dialing_e2e.py` (success Twilio + LiveKit-SIP paths, telephony-unavailable, Twilio failure, LiveKit failure, invalid phone). See updated §1/§3/§4/§11/§13/§14.*

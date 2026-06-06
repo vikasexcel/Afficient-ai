@@ -348,18 +348,178 @@ def _dispatch_dial_http(db, execution: Execution) -> None:
     )
 
 
+async def _run_graph_execution(db, execution: Execution, workflow) -> Execution:
+    """Drive the node-handler loop for a graph-based execution.
+
+    Each iteration:
+    1. Resolves the current node from ``execution.current_node_id``.
+    2. Looks up the registered handler for that node's type.
+    3. Runs the handler and captures its :class:`~modules.campaign.node_handlers.NodeResult`.
+    4. Persists the node's output.
+    5. If ``result.advance`` is True: advances the execution pointer to the
+       first outbound edge target (or marks it completed when there are none)
+       then loops.
+    6. If ``result.advance`` is False: commits and exits (blocking node or
+       terminal node — e.g. waiting for a webhook, or STOP reached).
+
+    Errors (unknown node id, unregistered type, handler exception) are
+    surfaced as ``failed`` executions so the retry engine can respond.
+    """
+
+    from modules.campaign.execution_service import ExecutionService
+    from modules.campaign.node_handlers import NODE_HANDLERS
+    from modules.campaign.workflow_service import WorkflowService
+
+    while True:
+        node_id = execution.current_node_id
+        if node_id is None:
+            try:
+                entry = WorkflowService.get_entry_node(workflow)
+                node_id = entry["id"]
+                ExecutionService.update_current_node(db, execution, node_id)
+            except ValueError as exc:
+                log.warning(
+                    "graph.no_entry_node",
+                    execution_id=str(execution.id),
+                    workflow_id=str(workflow.id),
+                    error=str(exc),
+                )
+                execution.status = "failed"
+                execution.last_failure_reason = str(exc)
+                db.commit()
+                return execution
+
+        node = next(
+            (n for n in (workflow.nodes or []) if n["id"] == node_id), None
+        )
+        if node is None:
+            reason = f"node '{node_id}' not found in workflow graph"
+            log.warning(
+                "graph.node_not_found",
+                execution_id=str(execution.id),
+                workflow_id=str(workflow.id),
+                node_id=node_id,
+            )
+            execution.status = "failed"
+            execution.last_failure_reason = reason
+            db.commit()
+            return execution
+
+        node_type = (node.get("type") or "").upper()
+        handler_class = NODE_HANDLERS.get(node_type)
+        if handler_class is None:
+            reason = f"no handler registered for node type '{node_type}'"
+            log.warning(
+                "graph.unknown_node_type",
+                execution_id=str(execution.id),
+                workflow_id=str(workflow.id),
+                node_id=node_id,
+                node_type=node_type,
+            )
+            execution.status = "failed"
+            execution.last_failure_reason = reason
+            db.commit()
+            return execution
+
+        log.info(
+            "graph.node.executing",
+            execution_id=str(execution.id),
+            workflow_id=str(workflow.id),
+            node_id=node_id,
+            node_type=node_type,
+        )
+
+        result = await handler_class().execute(db, execution, node)
+
+        if result.output:
+            ExecutionService.update_outputs(
+                db, execution, node_id=node_id, output=result.output
+            )
+
+        if not result.advance:
+            db.commit()
+            return execution
+
+        if result.next_node_id is not None:
+            # Handler explicitly chose the next node (e.g. CONDITION branching).
+            # Outputs were already saved above; just update the pointer.
+            ExecutionService.update_current_node(
+                db, execution, result.next_node_id
+            )
+        else:
+            # Normal advance — follow the first outbound edge (or mark
+            # completed when there are none).
+            ExecutionService.advance_execution(
+                db, execution, workflow, node_id, result.output
+            )
+
+        if execution.status in ("completed", "failed", "exhausted"):
+            db.commit()
+            return execution
+        # Continue loop with updated execution.current_node_id.
+
+
+def _dispatch_graph_execution(db, execution: Execution, workflow) -> None:
+    """Synchronous (Celery-safe) dispatcher for graph-based executions.
+
+    For CALL nodes that require real telephony over HTTP the existing
+    :func:`_dispatch_dial_http` synchronous path is reused — the FastAPI
+    process owns the AI-agent event loop.  Everything else (non-telephony
+    CALL, STOP, or any other immediate node) is handled via the async
+    graph runner on a short-lived event loop.
+    """
+
+    from modules.campaign.workflow_service import WorkflowService
+
+    node_id = execution.current_node_id
+    if node_id is None:
+        try:
+            node_id = WorkflowService.get_entry_node(workflow)["id"]
+        except ValueError:
+            log.warning(
+                "graph.dispatch.no_entry_node",
+                execution_id=str(execution.id),
+                workflow_id=str(workflow.id),
+            )
+            return
+
+    node = next(
+        (n for n in (workflow.nodes or []) if n["id"] == node_id), None
+    )
+    node_type = (node.get("type") or "").upper() if node else ""
+
+    if (
+        node_type == "CALL"
+        and settings.CAMPAIGN_TELEPHONY_DIALING_ENABLED
+        and _is_dial_candidate(execution)
+        and settings.CAMPAIGN_DISPATCH_VIA_HTTP
+    ):
+        _dispatch_dial_http(db, execution)
+        return
+
+    asyncio.run(_run_graph_execution(db, execution, workflow))
+
+
 def dispatch_execution(db, execution: Execution) -> None:
     """Scheduler dispatch entry point (synchronous, Celery-safe).
 
-    * Dial-candidate lead executions are originated by the FastAPI process
-      over authenticated internal HTTP (default) so the AI agent lifecycle is
-      tied to the long-running uvicorn event loop. No ``asyncio.run`` touches
-      the LiveKit / agent code here.
-    * Everything else (and the legacy in-process dial path, when
-      ``CAMPAIGN_DISPATCH_VIA_HTTP`` is False) runs through ``run_execution``
-      on a short-lived loop — these paths do not spawn a long-lived agent.
+    * Graph-based executions (``workflow.nodes`` is non-empty) are routed to
+      :func:`_dispatch_graph_execution` which handles the CALL-over-HTTP
+      fast path and falls back to the async graph runner for everything else.
+    * Legacy dial-candidate lead executions are originated by the FastAPI
+      process over authenticated internal HTTP (default) so the AI agent
+      lifecycle is tied to the long-running uvicorn event loop.
+    * Everything else runs through ``run_execution`` on a short-lived loop.
     """
 
+    from modules.campaign.workflow_model import Workflow as _Workflow
+
+    workflow = db.get(_Workflow, execution.workflow_id)
+    if workflow is not None and workflow.nodes:
+        _dispatch_graph_execution(db, execution, workflow)
+        return
+
+    # --- Legacy path (unchanged) ---
     is_dial = (
         settings.CAMPAIGN_TELEPHONY_DIALING_ENABLED
         and _is_dial_candidate(execution)
@@ -374,11 +534,21 @@ def dispatch_execution(db, execution: Execution) -> None:
 async def run_execution(db, execution: Execution) -> Execution:
     """Run one execution end-to-end.
 
-    Marks the row ``running``, calls the LLM with a short structured
-    prompt, captures the text output, and marks the row ``completed`` (or
-    ``failed`` if anything raised).
+    Graph-based executions (``workflow.nodes`` is non-empty) are dispatched
+    to :func:`_run_graph_execution` which drives the node-handler loop.
+
+    Legacy executions follow the existing path unchanged:
+    * Dial candidates → :func:`_dial_execution` (telephony enabled).
+    * All others → LLM planning stub.
     """
 
+    from modules.campaign.workflow_model import Workflow as _Workflow
+
+    workflow = db.get(_Workflow, execution.workflow_id)
+    if workflow is not None and workflow.nodes:
+        return await _run_graph_execution(db, execution, workflow)
+
+    # --- Legacy path (unchanged) ---
     # Preferred path: place a real outbound call (Twilio AMD + voicemail drop)
     # for a campaign lead. ``_dial_execution`` owns the full outcome of the
     # attempt — success leaves the row ``running`` (reconciled later by the

@@ -5,32 +5,24 @@ from __future__ import annotations
 import re
 import uuid
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
-from modules.leads.model import ALL_ACTIVITY_TYPES, ALL_LEAD_STATUSES
+from modules.leads.model import ALL_LEAD_STATUSES
 
 
-LeadStatus = Literal[
-    "new", "contacted", "qualified", "converted", "lost"
-]
-
-ActivityType = Literal["call", "email", "meeting", "note"]
+LeadStatus = str  # one of ALL_LEAD_STATUSES
 
 
-# Loose phone formatting (parens, dashes, spaces, leading +). Mirrors the
-# CSV upload validator so manually-added leads follow the same rules.
+# ---------------------------------------------------------------------------
+# Phone validation helper (shared by create + update)
+# ---------------------------------------------------------------------------
+
 _PHONE_ALLOWED_RE = re.compile(r"^[+\d\s().\-]+$")
 
 
 def _validate_phone(v: str) -> str:
-    """Validate a human-entered phone; return it trimmed.
-
-    Accepts common formatting characters but requires 7–15 actual digits
-    (E.164 caps at 15; under 7 is almost certainly garbage).
-    """
-
     raw = (v or "").strip()
     if not raw:
         raise ValueError("phone is required")
@@ -51,10 +43,9 @@ def _validate_phone(v: str) -> str:
 
 class LeadListOut(BaseModel):
     id: uuid.UUID
+    organization_id: uuid.UUID
     name: str
     description: str | None = None
-    source: str | None = None
-    lead_count: int
     created_at: datetime
     updated_at: datetime
 
@@ -68,7 +59,11 @@ class LeadListResponse(BaseModel):
 class CreateLeadListInput(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     description: str | None = Field(default=None, max_length=500)
-    source: str | None = Field(default=None, max_length=120)
+
+
+class UpdateLeadListInput(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=500)
 
 
 # ---------------------------------------------------------------------------
@@ -78,22 +73,32 @@ class CreateLeadListInput(BaseModel):
 
 class LeadOut(BaseModel):
     id: uuid.UUID
-    lead_list_id: uuid.UUID | None
-    name: str
-    email: str | None
+    organization_id: uuid.UUID
+    first_name: str
+    last_name: str | None = None
+    email: str | None = None
     phone: str
-    company: str | None
-    industry: str | None
-    location: str | None
-    source: str | None
+    linkedin_url: str | None = None
+    company: str | None = None
+    job_title: str | None = None
     status: LeadStatus
     tags: list[str] | None = None
-    custom_fields: dict[str, Any] | None = None
-    notes: str | None = None
+    extra_data: dict[str, Any] | None = None
+    lead_list_ids: list[uuid.UUID] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @classmethod
+    def model_validate(cls, obj, **kwargs):  # type: ignore[override]
+        instance = super().model_validate(obj, **kwargs)
+        # Populate lead_list_ids from the ORM relationship when available.
+        try:
+            instance.lead_list_ids = [ll.id for ll in obj.lead_lists]
+        except Exception:
+            pass
+        return instance
 
 
 class LeadListLeadsResponse(BaseModel):
@@ -102,47 +107,52 @@ class LeadListLeadsResponse(BaseModel):
 
 
 class CreateLeadInput(BaseModel):
-    """Body for ``POST /leads`` — manually add a single lead."""
-
-    name: str = Field(min_length=1, max_length=255)
-    phone: str = Field(min_length=1, max_length=40)
+    first_name: str = Field(min_length=1, max_length=120)
+    last_name: str | None = Field(default=None, max_length=120)
     email: EmailStr | None = None
+    phone: str = Field(min_length=1, max_length=40)
+    linkedin_url: str | None = Field(default=None, max_length=500)
     company: str | None = Field(default=None, max_length=255)
-    industry: str | None = Field(default=None, max_length=120)
-    location: str | None = Field(default=None, max_length=120)
-    source: str | None = Field(default=None, max_length=120)
-    status: LeadStatus = "new"
-    lead_list_id: uuid.UUID | None = None
+    job_title: str | None = Field(default=None, max_length=120)
+    status: str = "new"
     tags: list[str] | None = None
-    custom_fields: dict[str, Any] | None = None
-    notes: str | None = None
+    extra_data: dict[str, Any] | None = None
+    lead_list_ids: list[uuid.UUID] | None = None
 
     @field_validator("phone")
     @classmethod
     def _phone(cls, v: str) -> str:
         return _validate_phone(v)
 
-    @field_validator("name")
+    @field_validator("first_name")
     @classmethod
-    def _name(cls, v: str) -> str:
+    def _first_name(cls, v: str) -> str:
         v = (v or "").strip()
         if not v:
-            raise ValueError("name is required")
+            raise ValueError("first_name is required")
+        return v
+
+    @field_validator("status")
+    @classmethod
+    def _status(cls, v: str) -> str:
+        if v not in ALL_LEAD_STATUSES:
+            raise ValueError(
+                f"status must be one of {sorted(ALL_LEAD_STATUSES)}"
+            )
         return v
 
 
 class UpdateLeadInput(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=255)
+    first_name: str | None = Field(default=None, min_length=1, max_length=120)
+    last_name: str | None = Field(default=None, max_length=120)
     email: EmailStr | None = None
     phone: str | None = Field(default=None, max_length=40)
+    linkedin_url: str | None = Field(default=None, max_length=500)
     company: str | None = Field(default=None, max_length=255)
-    industry: str | None = Field(default=None, max_length=120)
-    location: str | None = Field(default=None, max_length=120)
-    source: str | None = Field(default=None, max_length=120)
-    status: LeadStatus | None = None
+    job_title: str | None = Field(default=None, max_length=120)
+    status: str | None = None
     tags: list[str] | None = None
-    custom_fields: dict[str, Any] | None = None
-    notes: str | None = None
+    extra_data: dict[str, Any] | None = None
 
     @field_validator("phone")
     @classmethod
@@ -164,109 +174,20 @@ class UpdateLeadInput(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Lead activities
+# Lead list membership
 # ---------------------------------------------------------------------------
 
 
-class CreateLeadActivityInput(BaseModel):
-    """Body for ``POST /leads/{id}/activities``."""
-
-    activity_type: ActivityType
-    notes: str | None = Field(default=None, max_length=5000)
-
-    @field_validator("activity_type")
-    @classmethod
-    def _type(cls, v: str) -> str:
-        if v not in ALL_ACTIVITY_TYPES:
-            raise ValueError(
-                f"activity_type must be one of {sorted(ALL_ACTIVITY_TYPES)}"
-            )
-        return v
+class AddLeadsToListInput(BaseModel):
+    lead_ids: list[uuid.UUID] = Field(min_length=1)
 
 
-class LeadActivityOut(BaseModel):
-    id: uuid.UUID
-    lead_id: uuid.UUID
-    user_id: uuid.UUID | None = None
-    activity_type: ActivityType
-    notes: str | None = None
-    created_at: datetime
-
-    model_config = {"from_attributes": True}
+class RemoveLeadsFromListInput(BaseModel):
+    lead_ids: list[uuid.UUID] = Field(min_length=1)
 
 
-class LeadActivityListResponse(BaseModel):
-    activities: list[LeadActivityOut]
-
-
-# ---------------------------------------------------------------------------
-# Upload preview + commit
-# ---------------------------------------------------------------------------
-
-
-class UploadParsedRow(BaseModel):
-    """One CSV row after parsing + validation."""
-
-    row_number: int
-    name: str | None = None
-    email: str | None = None
-    phone: str | None = None
-    company: str | None = None
-    industry: str | None = None
-    location: str | None = None
-    tags: list[str] | None = None
-    custom_fields: dict[str, Any] | None = None
-
-    # Server-assigned classification.
-    status: Literal["valid", "invalid", "duplicate"] = "valid"
-    errors: list[str] = Field(default_factory=list)
-
-
-class UploadPreviewResponse(BaseModel):
-    """Result of ``POST /leads/upload/preview``.
-
-    The frontend uses ``rows`` to render the data table, ``stats`` to
-    drive summary chips, and ``detected_columns`` to confirm that header
-    auto-mapping picked sensible columns.
-    """
-
-    rows: list[UploadParsedRow]
-    detected_columns: dict[str, str | None]
-    stats: dict[str, int]
-
-
-class UploadSegmentation(BaseModel):
-    """Bulk metadata applied to every row at commit time."""
-
-    industry: str | None = Field(default=None, max_length=120)
-    location: str | None = Field(default=None, max_length=120)
-    tags: list[str] = Field(default_factory=list)
-    custom_fields: dict[str, Any] = Field(default_factory=dict)
-
-
-class CommitRowInput(BaseModel):
-    """Row payload the FE sends after the user trims invalid + dupes."""
-
-    name: str = Field(min_length=1, max_length=255)
-    email: EmailStr | None = None
-    phone: str = Field(min_length=4, max_length=40)
-    company: str | None = Field(default=None, max_length=255)
-    industry: str | None = Field(default=None, max_length=120)
-    location: str | None = Field(default=None, max_length=120)
-    tags: list[str] | None = None
-    custom_fields: dict[str, Any] | None = None
-
-
-class CommitUploadInput(BaseModel):
-    rows: list[CommitRowInput] = Field(min_length=1)
-    segmentation: UploadSegmentation = Field(default_factory=UploadSegmentation)
-    # Either pick an existing list or hand us a name so we'll create one.
-    lead_list_id: uuid.UUID | None = None
-    new_list_name: str | None = Field(default=None, max_length=120)
-    source: str | None = Field(default=None, max_length=120)
-
-
-class CommitUploadResponse(BaseModel):
-    inserted: int
-    skipped_duplicates: int
-    lead_list: LeadListOut
+class MembershipResponse(BaseModel):
+    added: int = 0
+    removed: int = 0
+    already_member: int = 0
+    not_member: int = 0

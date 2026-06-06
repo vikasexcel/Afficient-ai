@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Activity,
   BookOpen,
   CalendarClock,
   CheckCircle2,
+  GitBranch,
   Loader2,
   Megaphone,
   Pencil,
+  Plus,
   Rocket,
   Trash2,
   Users,
@@ -13,8 +16,10 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { useNavigate } from "react-router-dom";
 import AppLayout from "@/components/layout/AppLayout";
 import CreateCampaignDialog from "@/components/campaign/CreateCampaignDialog";
+import CampaignWizardDialog from "@/components/campaigns/wizard/CampaignWizardDialog";
 import VoicemailDialog from "@/components/campaign/VoicemailDialog";
 import { Button } from "@/components/ui/button";
 import {
@@ -41,6 +46,7 @@ export default function Campaigns() {
   const [campaigns, setCampaigns] = useState<CampaignOut[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<CampaignOut | null>(null);
+  const [wizardOpen, setWizardOpen] = useState(false);
   const [voicemailFor, setVoicemailFor] = useState<CampaignOut | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -113,7 +119,13 @@ export default function Campaigns() {
 
           {canCreate && (
             <div className="self-start sm:self-auto">
-              <CreateCampaignDialog onCreated={refresh} onSaved={refresh} />
+              <Button
+                onClick={() => setWizardOpen(true)}
+                className="bg-violet-600 hover:bg-violet-500 text-white h-9 px-4 text-[13px]"
+              >
+                <Plus size={14} className="mr-1.5" />
+                Create Campaign
+              </Button>
             </div>
           )}
         </div>
@@ -124,7 +136,7 @@ export default function Campaigns() {
             Loading campaigns…
           </div>
         ) : campaigns.length === 0 ? (
-          <EmptyState canCreate={canCreate} />
+          <EmptyState canCreate={canCreate} onCreate={() => setWizardOpen(true)} />
         ) : (
           <CampaignsList
             campaigns={campaigns}
@@ -150,6 +162,13 @@ export default function Campaigns() {
         />
       )}
 
+      {/* Campaign creation wizard */}
+      <CampaignWizardDialog
+        open={wizardOpen}
+        onClose={() => setWizardOpen(false)}
+        onCreated={refresh}
+      />
+
       {/* Controlled edit dialog (no trigger of its own). */}
       {editing && (
         <CreateCampaignDialog
@@ -166,7 +185,7 @@ export default function Campaigns() {
   );
 }
 
-function EmptyState({ canCreate }: { canCreate: boolean }) {
+function EmptyState({ canCreate, onCreate }: { canCreate: boolean; onCreate: () => void }) {
   return (
     <div className="rounded-[12px] border border-white/[0.06] bg-white/[0.02] py-16 flex flex-col items-center text-center">
       <div className="h-11 w-11 rounded-full bg-violet-500/10 border border-violet-500/20 flex items-center justify-center mb-3">
@@ -178,6 +197,15 @@ function EmptyState({ canCreate }: { canCreate: boolean }) {
           ? "Create your first campaign to assign a playbook, pick a lead list, and start dialing."
           : "Once an admin creates a campaign it'll show up here."}
       </p>
+      {canCreate && (
+        <Button
+          onClick={onCreate}
+          className="mt-5 bg-violet-600 hover:bg-violet-500 text-white h-9 px-5 text-[13px]"
+        >
+          <Plus size={14} className="mr-1.5" />
+          Create Campaign
+        </Button>
+      )}
     </div>
   );
 }
@@ -234,6 +262,7 @@ function CampaignCard({
   onLaunch: (c: CampaignOut) => void;
   onVoicemail: (c: CampaignOut) => void;
 }) {
+  const navigate = useNavigate();
   const scheduleLabel = useMemo(() => {
     if (campaign.scheduled_at) {
       const d = new Date(campaign.scheduled_at);
@@ -294,6 +323,26 @@ function CampaignCard({
 
       {canCreate && (
         <div className="mt-3 pt-3 border-t border-white/[0.05] flex justify-end gap-1.5">
+          <Button
+            variant="ghost"
+            size="xs"
+            disabled={busy}
+            onClick={() => navigate(`/campaigns/${campaign.id}/workflow`)}
+            className="text-white/55 hover:text-sky-200"
+          >
+            <GitBranch size={12} />
+            Workflow
+          </Button>
+          <Button
+            variant="ghost"
+            size="xs"
+            disabled={busy}
+            onClick={() => navigate(`/campaigns/${campaign.id}/monitor`)}
+            className="text-white/55 hover:text-emerald-200"
+          >
+            <Activity size={12} />
+            Monitor
+          </Button>
           <Button
             variant="ghost"
             size="xs"

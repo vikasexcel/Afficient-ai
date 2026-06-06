@@ -1,3 +1,4 @@
+import logging
 import uuid
 
 from fastapi import (
@@ -15,19 +16,33 @@ from common.security.authorization import requires
 from common.security.roles import Role
 from database.dependencies import get_db
 from modules.auth.tenant import get_current_tenant
-from modules.campaign.execution_model import Execution
 from modules.campaign.model import Campaign
+from modules.campaign.repository import (
+    CampaignRepository,
+    ExecutionRepository,
+    WorkflowRepository,
+)
 from modules.campaign.schema import (
     ActivateCampaign,
     CampaignListResponse,
+    CampaignMonitorPayload,
     CampaignOut,
     CreateCampaign,
+    MonitorExecution,
     SchedulerStatusOut,
     UpdateCampaign,
+    WorkflowGraphResponse,
+    WorkflowGraphSchema,
+    WorkflowRestoreResponse,
+    WorkflowValidationResponse,
+    WorkflowVersionDetail,
+    WorkflowVersionListResponse,
+    WorkflowVersionSummary,
 )
 from modules.campaign.scheduler import CampaignScheduler
 from modules.campaign.scheduler_diagnostics import scheduler_status
 from modules.campaign.service import CampaignService
+from modules.campaign.workflow_service import WorkflowService
 from modules.campaign.voicemail import (
     VoicemailValidationError,
     store_recording,
@@ -35,12 +50,13 @@ from modules.campaign.voicemail import (
     validate_file_size,
     validate_voicemail_url,
 )
-from modules.campaign.workflow_model import Workflow
 
 router = APIRouter(
     prefix="/campaigns",
     tags=["campaigns"],
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _org_uuid(tenant: dict) -> uuid.UUID:
@@ -50,14 +66,7 @@ def _org_uuid(tenant: dict) -> uuid.UUID:
 def _load_campaign(
     db: Session, org_id: uuid.UUID, campaign_id: uuid.UUID
 ) -> Campaign:
-    campaign = (
-        db.query(Campaign)
-        .filter(
-            Campaign.id == campaign_id,
-            Campaign.organization_id == org_id,
-        )
-        .first()
-    )
+    campaign = CampaignRepository.get(db, org_id, campaign_id)
     if campaign is None:
         raise HTTPException(404, "campaign not found")
     return campaign
@@ -118,14 +127,7 @@ async def activate(
     tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
 ):
     org_id = _org_uuid(tenant)
-    campaign = (
-        db.query(Campaign)
-        .filter(
-            Campaign.id == data.campaign_id,
-            Campaign.organization_id == org_id,
-        )
-        .first()
-    )
+    campaign = CampaignRepository.get(db, org_id, data.campaign_id)
     if campaign is None:
         raise HTTPException(404, "campaign not found")
     return CampaignService.activate(db, campaign)
@@ -138,16 +140,7 @@ async def execute(
     tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
 ):
     org_id = _org_uuid(tenant)
-    # Tenant-scope the workflow lookup via its parent campaign.
-    workflow = (
-        db.query(Workflow)
-        .join(Campaign, Campaign.id == Workflow.campaign_id)
-        .filter(
-            Workflow.id == workflow_id,
-            Campaign.organization_id == org_id,
-        )
-        .first()
-    )
+    workflow = WorkflowRepository.get_for_org(db, org_id, workflow_id)
     if workflow is None:
         raise HTTPException(404, "workflow not found")
 
@@ -161,16 +154,7 @@ async def status(
     tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
 ):
     org_id = _org_uuid(tenant)
-    row = (
-        db.query(Execution)
-        .join(Workflow, Workflow.id == Execution.workflow_id)
-        .join(Campaign, Campaign.id == Workflow.campaign_id)
-        .filter(
-            Execution.id == id,
-            Campaign.organization_id == org_id,
-        )
-        .first()
-    )
+    row = ExecutionRepository.get_for_org(db, org_id, id)
     if row is None:
         raise HTTPException(404, "execution not found")
     return {
@@ -198,16 +182,7 @@ async def execution_retry_history(
     tenant=Depends(get_current_tenant),
 ):
     org_id = _org_uuid(tenant)
-    row = (
-        db.query(Execution)
-        .join(Workflow, Workflow.id == Execution.workflow_id)
-        .join(Campaign, Campaign.id == Workflow.campaign_id)
-        .filter(
-            Execution.id == id,
-            Campaign.organization_id == org_id,
-        )
-        .first()
-    )
+    row = ExecutionRepository.get_for_org(db, org_id, id)
     if row is None:
         raise HTTPException(404, "execution not found")
     return CampaignScheduler.retry_history(db, row)
@@ -261,6 +236,78 @@ async def campaign_retries(
 ):
     campaign = _load_campaign(db, _org_uuid(tenant), campaign_id)
     return CampaignScheduler.retries(db, campaign)
+
+
+@router.get("/{campaign_id}/monitor", response_model=CampaignMonitorPayload)
+async def campaign_monitor(
+    campaign_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    tenant=Depends(get_current_tenant),
+):
+    """Single-request dashboard payload for the Execution Monitoring UI.
+
+    Returns campaign metadata, execution metrics, all executions with lead
+    details (capped at 200, newest-first), and the active workflow graph.
+    Avoids N+1 queries by joining executions with leads in one statement.
+    """
+    from modules.leads.model import Lead as LeadModel  # local import to avoid circular
+
+    campaign = _load_campaign(db, _org_uuid(tenant), campaign_id)
+    metrics = CampaignScheduler.metrics(db, campaign)
+
+    # Executions joined with leads — single query.
+    rows = ExecutionRepository.list_for_campaign_with_leads(db, campaign_id)
+    executions: list[MonitorExecution] = []
+    for execution, lead in rows:
+        lead_name: str | None = None
+        lead_email: str | None = None
+        lead_phone: str | None = None
+        if lead is not None:
+            parts = [p for p in [lead.first_name, lead.last_name] if p]
+            lead_name = " ".join(parts) if parts else None
+            lead_email = lead.email
+            lead_phone = lead.phone
+        executions.append(
+            MonitorExecution(
+                id=execution.id,
+                status=execution.status,
+                lead_id=execution.lead_id,
+                lead_name=lead_name,
+                lead_email=lead_email,
+                lead_phone=lead_phone,
+                current_node_id=execution.current_node_id,
+                attempt_number=execution.attempt_number,
+                outcome=execution.outcome,
+                retry_status=execution.retry_status,
+                next_retry_at=execution.next_retry_at,
+                last_failure_reason=execution.last_failure_reason,
+                node_outputs=execution.node_outputs,
+                created_at=execution.created_at,
+                updated_at=execution.updated_at,
+            )
+        )
+
+    # Workflow graph (best-effort — 404 not raised for monitor).
+    wf_nodes: list = []
+    wf_edges: list = []
+    try:
+        wf = _load_active_workflow(db, campaign_id)
+        wf_nodes = list(wf.nodes or [])
+        wf_edges = list(wf.edges or [])
+    except Exception:
+        pass
+
+    return CampaignMonitorPayload(
+        campaign_id=campaign.id,
+        campaign_name=campaign.name,
+        campaign_status=campaign.status,
+        campaign_created_at=campaign.created_at,
+        lead_list_id=campaign.lead_list_id,
+        metrics=metrics,
+        executions=executions,
+        workflow_nodes=wf_nodes,
+        workflow_edges=wf_edges,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -329,6 +376,285 @@ async def set_voicemail(
         message_url=resolved_url,
         retry_on_voicemail=retry_on_voicemail,
         amd_unknown_fallback=amd_unknown_fallback,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Workflow graph  (Phase 3A)
+#
+# Declared before the bare /{campaign_id} routes so the static "workflow"
+# path segment is matched before the UUID catch-all.
+# ---------------------------------------------------------------------------
+
+
+def _load_active_workflow(db: Session, campaign_id: uuid.UUID):
+    """Return the active workflow for *campaign_id*, falling back to the most
+    recent workflow of any state (e.g. completed campaigns).  Raises 404 only
+    when the campaign has no workflow at all."""
+    wf = WorkflowRepository.get_active_for_campaign(db, campaign_id)
+    if wf is None:
+        wf = WorkflowRepository.get_latest_for_campaign(db, campaign_id)
+    if wf is None:
+        raise HTTPException(
+            404,
+            "no workflow for this campaign — use PUT /workflow to create one",
+        )
+    return wf
+
+
+@router.get(
+    "/{campaign_id}/workflow",
+    response_model=WorkflowGraphResponse,
+    summary="Get workflow graph",
+)
+async def get_workflow(
+    campaign_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    tenant=Depends(get_current_tenant),
+):
+    """Return the active workflow graph for a campaign.
+
+    Returns the ``nodes`` and ``edges`` arrays plus metadata.
+    Responds 404 when the campaign has no active workflow (or the campaign
+    itself does not exist / belongs to a different organisation).
+    """
+    try:
+        campaign = _load_campaign(db, _org_uuid(tenant), campaign_id)
+        wf = _load_active_workflow(db, campaign.id)
+        logger.info(
+            "Workflow GET: campaign_id=%s workflow_id=%s state=%s nodes=%d edges=%d",
+            campaign_id, wf.id, wf.state,
+            len(wf.nodes or []), len(wf.edges or []),
+        )
+        return WorkflowGraphResponse(
+            workflow_id=wf.id,
+            campaign_id=campaign.id,
+            state=wf.state,
+            nodes=list(wf.nodes or []),
+            edges=list(wf.edges or []),
+            node_count=len(wf.nodes or []),
+            edge_count=len(wf.edges or []),
+            is_graph=bool(wf.nodes),
+            created_at=wf.created_at,
+            updated_at=wf.updated_at,
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Workflow GET failed: campaign_id=%s", campaign_id)
+        raise
+
+
+@router.put(
+    "/{campaign_id}/workflow",
+    response_model=WorkflowGraphResponse,
+    summary="Replace workflow graph",
+)
+async def put_workflow(
+    campaign_id: uuid.UUID,
+    body: WorkflowGraphSchema,
+    db: Session = Depends(get_db),
+    tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
+):
+    """Create or replace the workflow graph for a campaign.
+
+    * If an active workflow already exists its graph is **replaced** in-place.
+    * If there is no active workflow a new one is created with state
+      ``"active"``.
+
+    The request is rejected (422) when the graph fails validation.
+
+    Not permitted for campaigns in ``completed`` status — those are archived.
+    """
+    campaign = _load_campaign(db, _org_uuid(tenant), campaign_id)
+
+    if campaign.status == "completed":
+        raise HTTPException(
+            409,
+            "cannot update the workflow of a completed campaign",
+        )
+
+    nodes = body.to_nodes_list()
+    edges = body.to_edges_list()
+
+    # validate_workflow raises ValueError on the first error.
+    try:
+        WorkflowService.validate_workflow(nodes, edges)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+    created_by = uuid.UUID(str(tenant["user_id"])) if tenant.get("user_id") else None
+    wf = WorkflowRepository.get_active_for_campaign(db, campaign.id)
+    if wf is not None:
+        wf = WorkflowService.update_graph(
+            db, wf, nodes=nodes, edges=edges, created_by=created_by
+        )
+    else:
+        wf = WorkflowService.create_workflow(
+            db,
+            campaign_id=campaign.id,
+            state="active",
+            nodes=nodes,
+            edges=edges,
+            created_by=created_by,
+        )
+    db.commit()
+    db.refresh(wf)
+
+    return WorkflowGraphResponse(
+        workflow_id=wf.id,
+        campaign_id=campaign.id,
+        state=wf.state,
+        nodes=list(wf.nodes or []),
+        edges=list(wf.edges or []),
+        node_count=len(wf.nodes or []),
+        edge_count=len(wf.edges or []),
+        is_graph=bool(wf.nodes),
+        created_at=wf.created_at,
+        updated_at=wf.updated_at,
+    )
+
+
+@router.post(
+    "/{campaign_id}/workflow/validate",
+    response_model=WorkflowValidationResponse,
+    summary="Validate workflow graph",
+)
+async def validate_workflow(
+    campaign_id: uuid.UUID,
+    body: WorkflowGraphSchema,
+    db: Session = Depends(get_db),
+    tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
+):
+    """Validate a workflow graph without persisting it.
+
+    Returns all errors and warnings in a single response so the frontend can
+    surface the complete set of issues at once rather than one-at-a-time.
+    Always returns HTTP 200 — ``valid`` in the body indicates the result.
+    """
+    # Confirm campaign ownership (same tenant guard, no 404 leak).
+    _load_campaign(db, _org_uuid(tenant), campaign_id)
+
+    nodes = body.to_nodes_list()
+    edges = body.to_edges_list()
+    errors, warnings = WorkflowService.validate_graph_detailed(nodes, edges)
+
+    return WorkflowValidationResponse(
+        valid=not errors,
+        errors=errors,
+        warnings=warnings,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Workflow version history  (Phase 3C)
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/{campaign_id}/workflow/versions",
+    response_model=WorkflowVersionListResponse,
+    summary="List workflow version history",
+)
+async def list_workflow_versions(
+    campaign_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    tenant=Depends(get_current_tenant),
+):
+    """Return the version history for the campaign's active workflow.
+
+    Versions are ordered newest-first.  Each entry includes the version number,
+    creation timestamp, and the author UUID (if recorded).  Graph payloads are
+    omitted for brevity — use GET /versions/{version} to fetch a snapshot.
+
+    Returns 404 when the campaign has no active workflow.
+    """
+    campaign = _load_campaign(db, _org_uuid(tenant), campaign_id)
+    wf = _load_active_workflow(db, campaign.id)
+    versions = WorkflowService.list_versions(db, wf.id)
+    return WorkflowVersionListResponse(
+        workflow_id=wf.id,
+        versions=[WorkflowVersionSummary.model_validate(v) for v in versions],
+        total=len(versions),
+    )
+
+
+@router.get(
+    "/{campaign_id}/workflow/versions/{version}",
+    response_model=WorkflowVersionDetail,
+    summary="Get a workflow version snapshot",
+)
+async def get_workflow_version(
+    campaign_id: uuid.UUID,
+    version: int,
+    db: Session = Depends(get_db),
+    tenant=Depends(get_current_tenant),
+):
+    """Return the full graph snapshot (nodes + edges) for a specific version.
+
+    Returns 404 when the campaign, workflow, or version number is not found.
+    """
+    campaign = _load_campaign(db, _org_uuid(tenant), campaign_id)
+    wf = _load_active_workflow(db, campaign.id)
+    record = WorkflowService.get_version(db, wf.id, version)
+    if record is None:
+        raise HTTPException(
+            404,
+            f"version {version} not found for this workflow",
+        )
+    return WorkflowVersionDetail.model_validate(record)
+
+
+@router.post(
+    "/{campaign_id}/workflow/versions/{version}/restore",
+    response_model=WorkflowRestoreResponse,
+    summary="Restore a workflow version",
+)
+async def restore_workflow_version(
+    campaign_id: uuid.UUID,
+    version: int,
+    db: Session = Depends(get_db),
+    tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
+):
+    """Restore the campaign's workflow graph to the state captured in *version*.
+
+    A **new** version record is created with the restored content so the
+    operation is fully auditable and history is never destroyed.
+
+    Not permitted for campaigns in ``completed`` status.
+
+    Returns 404 when the campaign, workflow, or requested version is missing.
+    Returns 422 when the snapshot fails graph validation.
+    """
+    campaign = _load_campaign(db, _org_uuid(tenant), campaign_id)
+
+    if campaign.status == "completed":
+        raise HTTPException(
+            409,
+            "cannot restore a workflow version for a completed campaign",
+        )
+
+    wf = _load_active_workflow(db, campaign.id)
+    created_by = uuid.UUID(str(tenant["user_id"])) if tenant.get("user_id") else None
+
+    try:
+        wf, new_ver = WorkflowService.restore_version(
+            db, wf, version, created_by=created_by
+        )
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+    db.commit()
+    db.refresh(wf)
+
+    return WorkflowRestoreResponse(
+        workflow_id=wf.id,
+        restored_from_version=version,
+        new_version=new_ver.version,
+        nodes=list(wf.nodes or []),
+        edges=list(wf.edges or []),
     )
 
 

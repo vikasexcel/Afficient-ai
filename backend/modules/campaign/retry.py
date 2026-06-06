@@ -19,7 +19,7 @@ business-hours window.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # --------------------------------------------------------------------------- #
 # Outcome vocabulary
@@ -157,7 +157,7 @@ def calculate_next_retry(
 ) -> datetime:
     """UTC instant of the next retry after ``attempt_number`` failed."""
 
-    now = now or datetime.utcnow()
+    now = now or datetime.now(timezone.utc)
     cfg = resolve_retry_config(retry_config)
     delay = backoff_delay_minutes(
         attempt_number,
@@ -238,7 +238,7 @@ def process_outcome(
     the legacy behaviour (voicemail is retryable) is preserved.
     """
 
-    now = now or datetime.utcnow()
+    now = now or datetime.now(timezone.utc)
     norm = _normalize_outcome(outcome)
     execution.outcome = norm
     failed_attempt = int(execution.attempt_number or 1)

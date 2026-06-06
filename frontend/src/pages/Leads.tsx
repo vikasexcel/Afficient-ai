@@ -1,6 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Filter,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  ChevronLeft,
+  ChevronRight,
   Loader2,
   MoreHorizontal,
   Phone,
@@ -11,12 +18,12 @@ import {
 import { toast } from "sonner";
 
 import AppLayout from "@/components/layout/AppLayout";
-import LeadUploadDialog from "@/components/leads/LeadUploadDialog";
 import LeadFormDialog from "@/components/leads/LeadFormDialog";
-import LogActivityDialog from "@/components/leads/LogActivityDialog";
-import LeadDetailsDialog from "@/components/leads/LeadDetailsDialog";
+import LeadDeleteDialog from "@/components/leads/LeadDeleteDialog";
+import LeadDrawer from "@/components/leads/LeadDrawer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
   TableBody,
@@ -33,20 +40,20 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { formatApiError } from "@/lib/apiError";
-import { formatLeadApiError, listLeads, deleteLead } from "@/services/lead";
+import {
+  formatLeadError,
+  listLeadLists,
+  listLeads,
+} from "@/services/leads";
 import { initiateCall } from "@/services/telephony";
-import type { Lead, LeadStatus } from "@/types/lead";
+import { leadFullName } from "@/types/lead";
+import type { Lead, LeadList, LeadStatus } from "@/types/lead";
 
-// Telephony backend (Twilio + LiveKit SIP) is implemented, so calling is
-// enabled. Flip to false to fall back to a disabled "coming soon" button.
-const CALLING_ENABLED = true;
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
 
-/** Best-effort conversion of a stored phone to E.164 for the call API. */
-function toE164(phone: string): string {
-  const digits = (phone ?? "").replace(/\D/g, "");
-  return `+${digits}`;
-}
+const PAGE_SIZE = 20;
 
 const STATUS_FILTERS: { id: LeadStatus | "all"; label: string }[] = [
   { id: "all", label: "All" },
@@ -57,430 +64,13 @@ const STATUS_FILTERS: { id: LeadStatus | "all"; label: string }[] = [
   { id: "lost", label: "Lost" },
 ];
 
-export default function Leads() {
-  const [query, setQuery] = useState("");
-  const [status, setStatus] = useState<LeadStatus | "all">("all");
-  const [leads, setLeads] = useState<Lead[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  // Modal coordination. Only one dialog is shown at a time.
-  const [formState, setFormState] = useState<
-    { mode: "add" } | { mode: "edit"; lead: Lead } | null
-  >(null);
-  const [activityLead, setActivityLead] = useState<Lead | null>(null);
-  const [detailsLead, setDetailsLead] = useState<Lead | null>(null);
-  const [detailsRefresh, setDetailsRefresh] = useState(0);
-
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    try {
-      const { leads } = await listLeads({ limit: 1000 });
-      setLeads(leads);
-    } catch (err) {
-      toast.error(formatLeadApiError(err, "Failed to load leads"));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return leads.filter((lead) => {
-      if (status !== "all" && lead.status !== status) return false;
-      if (!q) return true;
-      // Case-insensitive partial match across every meaningful field so
-      // "Sof" → "Software" (industry) and "754" → phone both resolve.
-      const haystack = [
-        lead.name,
-        lead.email ?? "",
-        lead.phone,
-        lead.company ?? "",
-        lead.industry ?? "",
-        ...(lead.tags ?? []),
-      ]
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(q);
-    });
-  }, [query, status, leads]);
-
-  const counts = useMemo(() => {
-    const byStatus = (s: LeadStatus) =>
-      leads.filter((l) => l.status === s).length;
-    return {
-      total: leads.length,
-      new: byStatus("new"),
-      qualified: byStatus("qualified"),
-      contacted: byStatus("contacted"),
-    };
-  }, [leads]);
-
-  async function handleDelete(lead: Lead) {
-    try {
-      await deleteLead(lead.id);
-      toast.success(`Deleted ${lead.name}`);
-      await refresh();
-    } catch (err) {
-      toast.error(formatLeadApiError(err, "Delete failed"));
-    }
-  }
-
-  async function handleStartCall(lead: Lead) {
-    if (!CALLING_ENABLED) {
-      toast.message("Calling functionality coming soon");
-      return;
-    }
-    const toastId = toast.loading(`Calling ${lead.name}…`);
-    try {
-      await initiateCall({
-        to_number: toE164(lead.phone),
-        lead_id: lead.id,
-        lead_name: lead.name,
-        lead_phone: toE164(lead.phone),
-      });
-      toast.success(`Call started to ${lead.name}`, { id: toastId });
-    } catch (err) {
-      const status = (err as { response?: { status?: number } })?.response
-        ?.status;
-      if (status === 404 || status === 405) {
-        toast.message("Calling functionality coming soon", { id: toastId });
-        return;
-      }
-      toast.error(formatApiError(err, "Could not start the call"), {
-        id: toastId,
-      });
-    }
-  }
-
-  function openDetails(lead: Lead) {
-    setDetailsLead(lead);
-  }
-
-  function openEdit(lead: Lead) {
-    setDetailsLead(null);
-    setActivityLead(null);
-    setFormState({ mode: "edit", lead });
-  }
-
-  function openLogActivity(lead: Lead) {
-    setActivityLead(lead);
-  }
-
-  return (
-    <AppLayout>
-      <div className="space-y-6 max-w-6xl">
-        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-          <div className="min-w-0">
-            <h1 className="text-xl sm:text-2xl font-medium text-white">Leads</h1>
-            <p className="text-[13px] text-white/40 mt-1">
-              Manage prospects and pipeline activity.
-            </p>
-          </div>
-
-          <div className="flex items-center gap-2 flex-wrap">
-            <LeadUploadDialog
-              onImported={(res) => {
-                toast.success(
-                  `${res.inserted.toLocaleString()} lead${res.inserted === 1 ? "" : "s"} added to "${res.lead_list.name}"`
-                );
-                void refresh();
-              }}
-            />
-            <Button
-              size="sm"
-              className="bg-violet-600 hover:bg-violet-500 text-white"
-              onClick={() => setFormState({ mode: "add" })}
-            >
-              <Plus size={13} />
-              Add lead
-            </Button>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <StatCard label="Total leads" value={counts.total} accent="violet" />
-          <StatCard label="New" value={counts.new} accent="emerald" />
-          <StatCard
-            label="Contacted"
-            value={counts.contacted}
-            accent="amber"
-          />
-          <StatCard label="Qualified" value={counts.qualified} accent="sky" />
-        </div>
-
-        <div className="rounded-[12px] border border-white/[0.06] bg-white/[0.02]">
-          <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-3 p-3 border-b border-white/[0.05]">
-            <div className="relative w-full md:flex-1 md:max-w-sm">
-              <Search
-                size={14}
-                className="absolute left-2.5 top-1/2 -translate-y-1/2 text-white/35"
-              />
-              <Input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search by name, email, company, or phone"
-                className="pl-8 h-9 bg-white/[0.03] border-white/[0.08] text-[13px]"
-              />
-            </div>
-
-            {/* Mobile status filter: native select keeps it ergonomic. */}
-            <div className="md:hidden">
-              <select
-                value={status}
-                onChange={(e) =>
-                  setStatus(e.target.value as LeadStatus | "all")
-                }
-                className="w-full h-9 bg-white/[0.03] border border-white/[0.08] rounded-[8px] px-2.5 text-[13px] text-white outline-none"
-                aria-label="Filter by status"
-              >
-                {STATUS_FILTERS.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="hidden md:flex items-center gap-1.5 flex-wrap">
-              <Filter size={12} className="text-white/35" />
-              {STATUS_FILTERS.map((s) => {
-                const active = status === s.id;
-                return (
-                  <button
-                    key={s.id}
-                    type="button"
-                    onClick={() => setStatus(s.id)}
-                    className={cn(
-                      "px-2.5 h-7 rounded-[7px] text-[12px] transition-colors",
-                      active
-                        ? "bg-violet-500/15 text-violet-200 border border-violet-500/30"
-                        : "text-white/55 hover:text-white/85 hover:bg-white/[0.04] border border-transparent"
-                    )}
-                  >
-                    {s.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {loading ? (
-            <div className="py-16 flex items-center justify-center text-white/45">
-              <Loader2 size={16} className="animate-spin mr-2" />
-              Loading leads…
-            </div>
-          ) : filtered.length === 0 ? (
-            <EmptyState query={query} />
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow className="border-white/[0.05] hover:bg-transparent">
-                  <TableHead className="text-white/40 font-medium text-[11px] uppercase tracking-wider">
-                    Name
-                  </TableHead>
-                  <TableHead className="text-white/40 font-medium text-[11px] uppercase tracking-wider">
-                    Contact
-                  </TableHead>
-                  <TableHead className="text-white/40 font-medium text-[11px] uppercase tracking-wider">
-                    Status
-                  </TableHead>
-                  <TableHead className="text-white/40 font-medium text-[11px] uppercase tracking-wider">
-                    Source
-                  </TableHead>
-                  <TableHead className="text-white/40 font-medium text-[11px] uppercase tracking-wider">
-                    Industry
-                  </TableHead>
-                  <TableHead className="text-white/40 font-medium text-[11px] uppercase tracking-wider">
-                    Added
-                  </TableHead>
-                  <TableHead className="w-12" />
-                </TableRow>
-              </TableHeader>
-
-              <TableBody>
-                {filtered.map((lead) => (
-                  <TableRow
-                    key={lead.id}
-                    className="border-white/[0.04] hover:bg-white/[0.02]"
-                  >
-                    <TableCell className="py-2.5">
-                      <div className="flex items-center gap-2.5">
-                        <Avatar name={lead.name} />
-                        <div className="min-w-0">
-                          <div className="text-[13px] text-white truncate">
-                            {lead.name}
-                          </div>
-                          <div className="text-[11px] text-white/40 truncate">
-                            {lead.company ?? "—"}
-                          </div>
-                        </div>
-                      </div>
-                    </TableCell>
-
-                    <TableCell className="py-2.5">
-                      <div className="text-[12px] text-white/80 truncate">
-                        {lead.email ?? "—"}
-                      </div>
-                      <div className="text-[11px] text-white/40 flex items-center gap-1 mt-0.5">
-                        <Phone size={10} />
-                        {lead.phone}
-                      </div>
-                    </TableCell>
-
-                    <TableCell className="py-2.5">
-                      <StatusBadge status={lead.status} />
-                    </TableCell>
-
-                    <TableCell className="py-2.5 text-[12px] text-white/70">
-                      {lead.source ?? "—"}
-                    </TableCell>
-
-                    <TableCell className="py-2.5 text-[12px] text-white/70">
-                      {lead.industry ?? "—"}
-                    </TableCell>
-
-                    <TableCell className="py-2.5 text-[12px] text-white/55">
-                      {lead.created_at
-                        ? new Date(lead.created_at).toLocaleDateString()
-                        : "—"}
-                    </TableCell>
-
-                    <TableCell className="py-2.5">
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            className="text-white/50 hover:text-white"
-                          >
-                            <MoreHorizontal size={14} />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent
-                          align="end"
-                          className="w-44 bg-[#111114] border-white/[0.08]"
-                        >
-                          <DropdownMenuItem
-                            onSelect={() => openDetails(lead)}
-                          >
-                            View details
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onSelect={() => openEdit(lead)}
-                          >
-                            Edit
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            disabled={!CALLING_ENABLED}
-                            onSelect={() => void handleStartCall(lead)}
-                          >
-                            Start call
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onSelect={() => openLogActivity(lead)}
-                          >
-                            Log activity
-                          </DropdownMenuItem>
-                          <DropdownMenuSeparator className="bg-white/[0.06]" />
-                          <DropdownMenuItem
-                            className="text-red-400 focus:text-red-300"
-                            onSelect={() => void handleDelete(lead)}
-                          >
-                            Delete
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </div>
-      </div>
-
-      <LeadFormDialog
-        open={formState !== null}
-        onOpenChange={(o) => {
-          if (!o) setFormState(null);
-        }}
-        lead={formState?.mode === "edit" ? formState.lead : null}
-        onSaved={(saved) => {
-          void refresh();
-          // Keep an open details view in sync after an edit.
-          setDetailsLead((cur) => (cur && cur.id === saved.id ? saved : cur));
-        }}
-      />
-
-      <LogActivityDialog
-        open={activityLead !== null}
-        onOpenChange={(o) => {
-          if (!o) setActivityLead(null);
-        }}
-        lead={activityLead}
-        onLogged={() => setDetailsRefresh((n) => n + 1)}
-      />
-
-      <LeadDetailsDialog
-        open={detailsLead !== null}
-        onOpenChange={(o) => {
-          if (!o) setDetailsLead(null);
-        }}
-        lead={detailsLead}
-        refreshKey={detailsRefresh}
-        callDisabled={!CALLING_ENABLED}
-        onEdit={openEdit}
-        onLogActivity={openLogActivity}
-        onStartCall={(lead) => void handleStartCall(lead)}
-      />
-    </AppLayout>
-  );
-}
-
-function StatCard({
-  label,
-  value,
-  accent,
-}: {
-  label: string;
-  value: number;
-  accent: "violet" | "emerald" | "amber" | "sky";
-}) {
-  const accentMap = {
-    violet: "text-violet-300 bg-violet-500/10 border-violet-500/20",
-    emerald: "text-emerald-300 bg-emerald-500/10 border-emerald-500/20",
-    amber: "text-amber-300 bg-amber-500/10 border-amber-500/20",
-    sky: "text-sky-300 bg-sky-500/10 border-sky-500/20",
-  } as const;
-
-  return (
-    <div className="rounded-[10px] border border-white/[0.06] bg-white/[0.02] p-4 flex items-center gap-3">
-      <div
-        className={cn(
-          "h-9 w-9 rounded-[8px] border flex items-center justify-center",
-          accentMap[accent]
-        )}
-      >
-        <Users size={14} />
-      </div>
-      <div>
-        <div className="text-[11px] text-white/45 uppercase tracking-wider">
-          {label}
-        </div>
-        <div className="text-[18px] font-semibold text-white">{value}</div>
-      </div>
-    </div>
-  );
-}
-
-const STATUS_STYLES: Record<LeadStatus, { label: string; className: string }> = {
+const STATUS_CONFIG: Record<
+  LeadStatus,
+  { label: string; className: string }
+> = {
   new: {
     label: "New",
-    className: "bg-sky-500/10 text-sky-300 border-sky-500/20",
+    className: "bg-sky-500/10 text-sky-300 border-sky-500/25",
   },
   contacted: {
     label: "Contacted",
@@ -500,17 +90,535 @@ const STATUS_STYLES: Record<LeadStatus, { label: string; className: string }> = 
   },
 };
 
-function StatusBadge({ status }: { status: LeadStatus }) {
-  const s = STATUS_STYLES[status];
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function toE164(phone: string) {
+  return `+${phone.replace(/\D/g, "")}`;
+}
+
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
+
+export default function Leads() {
+  // List state
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [leadLists, setLeadLists] = useState<LeadList[]>([]);
+
+  // Filters
+  const [rawSearch, setRawSearch] = useState("");
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<LeadStatus | "all">("all");
+  const [page, setPage] = useState(0); // 0-indexed
+
+  // Modal state
+  const [formOpen, setFormOpen] = useState(false);
+  const [editLead, setEditLead] = useState<Lead | null>(null);
+  const [deleteLead, setDeleteLead] = useState<Lead | null>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [drawerLead, setDrawerLead] = useState<Lead | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  // Debounce search input (300 ms)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function handleSearchChange(value: string) {
+    setRawSearch(value);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      setSearch(value.trim());
+      setPage(0);
+    }, 300);
+  }
+
+  // Fetch leads (stable reference; re-runs when deps change)
+  const fetchLeads = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [result, lists] = await Promise.all([
+        listLeads({
+          search: search || undefined,
+          status: statusFilter !== "all" ? statusFilter : undefined,
+          limit: PAGE_SIZE,
+          offset: page * PAGE_SIZE,
+        }),
+        listLeadLists(),
+      ]);
+      setLeads(result.leads);
+      setTotal(result.total);
+      setLeadLists(lists);
+    } catch (err) {
+      toast.error(formatLeadError(err, "Failed to load leads"));
+    } finally {
+      setLoading(false);
+    }
+  }, [search, statusFilter, page]);
+
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { void fetchLeads(); }, [fetchLeads]);
+
+  // Computed stats (approximate from current page total, not per-page data)
+  const pageCount = Math.ceil(total / PAGE_SIZE);
+  const fromIndex = total === 0 ? 0 : page * PAGE_SIZE + 1;
+  const toIndex = Math.min((page + 1) * PAGE_SIZE, total);
+
+  // Stat counts from current page leads
+  const counts = useMemo(
+    () => ({
+      total,
+      new: leads.filter((l) => l.status === "new").length,
+      qualified: leads.filter((l) => l.status === "qualified").length,
+      contacted: leads.filter((l) => l.status === "contacted").length,
+    }),
+    [leads, total]
+  );
+
+  // ---------------------------------------------------------------------------
+  // Actions
+  // ---------------------------------------------------------------------------
+
+  function openCreate() {
+    setEditLead(null);
+    setFormOpen(true);
+  }
+
+  function openEdit(lead: Lead) {
+    setEditLead(lead);
+    setFormOpen(true);
+    setDrawerOpen(false);
+  }
+
+  function openDelete(lead: Lead) {
+    setDeleteLead(lead);
+    setDeleteOpen(true);
+    setDrawerOpen(false);
+  }
+
+  function openDrawer(lead: Lead) {
+    setDrawerLead(lead);
+    setDrawerOpen(true);
+  }
+
+  async function handleCall(lead: Lead) {
+    const name = leadFullName(lead);
+    const toastId = toast.loading(`Calling ${name}…`);
+    try {
+      await initiateCall({
+        to_number: toE164(lead.phone),
+        lead_id: lead.id,
+        lead_name: name,
+        lead_phone: toE164(lead.phone),
+      });
+      toast.success(`Call started to ${name}`, { id: toastId });
+    } catch (err) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (status === 404 || status === 405) {
+        toast.message("Calling coming soon", { id: toastId });
+        return;
+      }
+      toast.error(formatLeadError(err, "Could not start call"), { id: toastId });
+    }
+  }
+
+  function handleSaved(saved: Lead) {
+    void fetchLeads();
+    // If the drawer is open for this lead, update it.
+    if (drawerLead?.id === saved.id) setDrawerLead(saved);
+  }
+
+  function handleDeleted() {
+    void fetchLeads();
+    if (drawerOpen) setDrawerOpen(false);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Render
+  // ---------------------------------------------------------------------------
+
   return (
-    <span
-      className={cn(
-        "inline-flex items-center h-5 px-2 rounded-full border text-[11px] font-medium",
-        s.className
-      )}
-    >
-      {s.label}
-    </span>
+    <AppLayout>
+      <div className="space-y-6 max-w-6xl">
+        {/* Page header */}
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="text-xl sm:text-2xl font-medium text-white">
+              Leads
+            </h1>
+            <p className="text-[13px] text-white/40 mt-1">
+              {total > 0
+                ? `${total.toLocaleString()} lead${total === 1 ? "" : "s"} in your pipeline`
+                : "Manage prospects and pipeline activity."}
+            </p>
+          </div>
+          <Button
+            size="sm"
+            className="bg-violet-600 hover:bg-violet-500 text-white self-start sm:self-auto"
+            onClick={openCreate}
+          >
+            <Plus size={13} />
+            Add lead
+          </Button>
+        </div>
+
+        {/* Stat cards */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <StatCard label="Total" value={total} accent="violet" />
+          <StatCard label="New" value={counts.new} accent="sky" />
+          <StatCard label="Contacted" value={counts.contacted} accent="amber" />
+          <StatCard label="Qualified" value={counts.qualified} accent="emerald" />
+        </div>
+
+        {/* Table card */}
+        <div className="rounded-[12px] border border-white/[0.06] bg-white/[0.02]">
+          {/* Toolbar */}
+          <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-3 p-3 border-b border-white/[0.05]">
+            {/* Search */}
+            <div className="relative flex-1 md:max-w-xs">
+              <Search
+                size={13}
+                className="absolute left-2.5 top-1/2 -translate-y-1/2 text-white/35 pointer-events-none"
+              />
+              <Input
+                value={rawSearch}
+                onChange={(e) => handleSearchChange(e.target.value)}
+                placeholder="Search name, email, phone…"
+                className="pl-8 h-9 bg-white/[0.03] border-white/[0.08] text-[13px] text-white placeholder:text-white/30"
+              />
+            </div>
+
+            {/* Mobile filter */}
+            <div className="md:hidden">
+              <select
+                value={statusFilter}
+                onChange={(e) => {
+                  setStatusFilter(e.target.value as LeadStatus | "all");
+                  setPage(0);
+                }}
+                className="w-full h-9 rounded-[8px] bg-white/[0.03] border border-white/[0.08] px-2.5 text-[13px] text-white outline-none"
+              >
+                {STATUS_FILTERS.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Desktop filter pills */}
+            <div className="hidden md:flex items-center gap-1 flex-wrap">
+              {STATUS_FILTERS.map((s) => {
+                const active = statusFilter === s.id;
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => { setStatusFilter(s.id); setPage(0); }}
+                    className={cn(
+                      "px-2.5 h-7 rounded-[7px] text-[12px] transition-colors border",
+                      active
+                        ? "bg-violet-500/15 text-violet-200 border-violet-500/30"
+                        : "text-white/50 hover:text-white/85 hover:bg-white/[0.04] border-transparent"
+                    )}
+                  >
+                    {s.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Loading indicator */}
+            {loading && (
+              <Loader2
+                size={14}
+                className="animate-spin text-white/30 ml-auto"
+              />
+            )}
+          </div>
+
+          {/* Table */}
+          {loading && leads.length === 0 ? (
+            <TableSkeleton />
+          ) : leads.length === 0 ? (
+            <EmptyState
+              hasFilters={!!search || statusFilter !== "all"}
+              onClear={() => {
+                setRawSearch("");
+                setSearch("");
+                setStatusFilter("all");
+              }}
+            />
+          ) : (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="border-white/[0.05] hover:bg-transparent">
+                    <TableHead className="text-[11px] font-medium text-white/40 uppercase tracking-wider min-w-[180px]">
+                      Name
+                    </TableHead>
+                    <TableHead className="text-[11px] font-medium text-white/40 uppercase tracking-wider min-w-[160px]">
+                      Contact
+                    </TableHead>
+                    <TableHead className="text-[11px] font-medium text-white/40 uppercase tracking-wider min-w-[120px] hidden md:table-cell">
+                      Job title
+                    </TableHead>
+                    <TableHead className="text-[11px] font-medium text-white/40 uppercase tracking-wider">
+                      Status
+                    </TableHead>
+                    <TableHead className="text-[11px] font-medium text-white/40 uppercase tracking-wider hidden lg:table-cell">
+                      Tags
+                    </TableHead>
+                    <TableHead className="text-[11px] font-medium text-white/40 uppercase tracking-wider hidden sm:table-cell">
+                      Added
+                    </TableHead>
+                    <TableHead className="w-12" />
+                  </TableRow>
+                </TableHeader>
+
+                <TableBody>
+                  {leads.map((lead) => {
+                    const fullName = leadFullName(lead);
+                    const status = STATUS_CONFIG[lead.status];
+                    return (
+                      <TableRow
+                        key={lead.id}
+                        className="border-white/[0.04] hover:bg-white/[0.02] cursor-pointer group"
+                        onClick={() => openDrawer(lead)}
+                      >
+                        {/* Name + company */}
+                        <TableCell className="py-3">
+                          <div className="flex items-center gap-2.5">
+                            <Avatar name={fullName} />
+                            <div className="min-w-0">
+                              <p className="text-[13px] text-white truncate leading-tight">
+                                {fullName}
+                              </p>
+                              {lead.company && (
+                                <p className="text-[11px] text-white/40 truncate mt-0.5">
+                                  {lead.company}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        </TableCell>
+
+                        {/* Contact */}
+                        <TableCell className="py-3">
+                          {lead.email && (
+                            <p className="text-[12px] text-white/75 truncate leading-tight">
+                              {lead.email}
+                            </p>
+                          )}
+                          <div className="flex items-center gap-1 mt-0.5 text-[11px] text-white/40">
+                            <Phone size={10} />
+                            {lead.phone}
+                          </div>
+                        </TableCell>
+
+                        {/* Job title */}
+                        <TableCell className="py-3 text-[12px] text-white/65 hidden md:table-cell">
+                          {lead.job_title ?? (
+                            <span className="text-white/25">—</span>
+                          )}
+                        </TableCell>
+
+                        {/* Status */}
+                        <TableCell className="py-3">
+                          <span
+                            className={cn(
+                              "inline-flex items-center h-5 px-2 rounded-full border text-[11px] font-medium",
+                              status.className
+                            )}
+                          >
+                            {status.label}
+                          </span>
+                        </TableCell>
+
+                        {/* Tags */}
+                        <TableCell className="py-3 hidden lg:table-cell">
+                          {lead.tags && lead.tags.length > 0 ? (
+                            <div className="flex flex-wrap gap-1 max-w-[160px]">
+                              {lead.tags.slice(0, 2).map((tag) => (
+                                <span
+                                  key={tag}
+                                  className="inline-flex items-center h-4 px-1.5 rounded-full bg-white/[0.05] border border-white/[0.07] text-[10px] text-white/55"
+                                >
+                                  {tag}
+                                </span>
+                              ))}
+                              {lead.tags.length > 2 && (
+                                <span className="text-[10px] text-white/35">
+                                  +{lead.tags.length - 2}
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-[11px] text-white/25">—</span>
+                          )}
+                        </TableCell>
+
+                        {/* Added */}
+                        <TableCell className="py-3 text-[12px] text-white/45 whitespace-nowrap hidden sm:table-cell">
+                          {new Date(lead.created_at).toLocaleDateString()}
+                        </TableCell>
+
+                        {/* Row actions */}
+                        <TableCell
+                          className="py-3"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                className="text-white/35 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                              >
+                                <MoreHorizontal size={14} />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent
+                              align="end"
+                              className="w-40 bg-[#111114] border-white/[0.08] text-[13px]"
+                            >
+                              <DropdownMenuItem
+                                onSelect={() => openDrawer(lead)}
+                              >
+                                View details
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onSelect={() => openEdit(lead)}
+                              >
+                                Edit
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onSelect={() => void handleCall(lead)}
+                              >
+                                Start call
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator className="bg-white/[0.06]" />
+                              <DropdownMenuItem
+                                className="text-red-400 focus:text-red-300 focus:bg-red-500/10"
+                                onSelect={() => openDelete(lead)}
+                              >
+                                Delete
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+
+          {/* Pagination footer */}
+          {total > PAGE_SIZE && (
+            <div className="flex items-center justify-between px-4 py-3 border-t border-white/[0.05]">
+              <span className="text-[12px] text-white/40">
+                {fromIndex}–{toIndex} of {total.toLocaleString()}
+              </span>
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  disabled={page === 0}
+                  onClick={() => setPage((p) => p - 1)}
+                  className="text-white/50 hover:text-white disabled:opacity-30"
+                >
+                  <ChevronLeft size={15} />
+                </Button>
+                <span className="text-[12px] text-white/50 px-2">
+                  {page + 1} / {pageCount}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  disabled={page >= pageCount - 1}
+                  onClick={() => setPage((p) => p + 1)}
+                  className="text-white/50 hover:text-white disabled:opacity-30"
+                >
+                  <ChevronRight size={15} />
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Create / Edit dialog */}
+      <LeadFormDialog
+        open={formOpen}
+        onOpenChange={setFormOpen}
+        lead={editLead}
+        onSaved={handleSaved}
+      />
+
+      {/* Delete confirmation */}
+      <LeadDeleteDialog
+        lead={deleteLead}
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        onDeleted={handleDeleted}
+      />
+
+      {/* Details drawer */}
+      <LeadDrawer
+        key={drawerLead?.id}
+        lead={drawerLead}
+        open={drawerOpen}
+        onOpenChange={setDrawerOpen}
+        leadLists={leadLists}
+        onEdit={openEdit}
+        onDelete={openDelete}
+        onCall={(lead) => void handleCall(lead)}
+      />
+    </AppLayout>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sub-components
+// ---------------------------------------------------------------------------
+
+function StatCard({
+  label,
+  value,
+  accent,
+}: {
+  label: string;
+  value: number;
+  accent: "violet" | "sky" | "amber" | "emerald";
+}) {
+  const cls = {
+    violet: "text-violet-300 bg-violet-500/10 border-violet-500/20",
+    sky: "text-sky-300 bg-sky-500/10 border-sky-500/20",
+    amber: "text-amber-300 bg-amber-500/10 border-amber-500/20",
+    emerald: "text-emerald-300 bg-emerald-500/10 border-emerald-500/20",
+  } as const;
+  return (
+    <div className="rounded-[10px] border border-white/[0.06] bg-white/[0.02] p-4 flex items-center gap-3">
+      <div
+        className={cn(
+          "h-9 w-9 shrink-0 rounded-[8px] border flex items-center justify-center",
+          cls[accent]
+        )}
+      >
+        <Users size={14} />
+      </div>
+      <div>
+        <p className="text-[11px] text-white/40 uppercase tracking-wider">
+          {label}
+        </p>
+        <p className="text-[20px] font-semibold text-white leading-tight">
+          {value.toLocaleString()}
+        </p>
+      </div>
+    </div>
   );
 }
 
@@ -521,28 +629,59 @@ function Avatar({ name }: { name: string }) {
     .join("")
     .slice(0, 2)
     .toUpperCase();
-
   return (
-    <span className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-white/[0.06] border border-white/[0.08] text-[11px] font-medium text-white/80">
+    <span className="inline-flex shrink-0 items-center justify-center w-8 h-8 rounded-full bg-white/[0.06] border border-white/[0.08] text-[11px] font-medium text-white/75">
       {initials}
     </span>
   );
 }
 
-function EmptyState({ query }: { query: string }) {
+function TableSkeleton() {
   return (
-    <div className="py-16 flex flex-col items-center justify-center text-center">
-      <div className="h-10 w-10 rounded-full bg-white/[0.04] border border-white/[0.06] flex items-center justify-center mb-3">
-        <Users size={16} className="text-white/40" />
+    <div className="p-4 space-y-3">
+      {Array.from({ length: 5 }).map((_, i) => (
+        <div key={i} className="flex items-center gap-3">
+          <Skeleton className="h-8 w-8 rounded-full shrink-0" />
+          <Skeleton className="h-4 flex-1 max-w-[160px]" />
+          <Skeleton className="h-4 flex-1 max-w-[140px] hidden md:block" />
+          <Skeleton className="h-5 w-16 rounded-full" />
+          <Skeleton className="h-4 w-20 ml-auto hidden sm:block" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function EmptyState({
+  hasFilters,
+  onClear,
+}: {
+  hasFilters: boolean;
+  onClear: () => void;
+}) {
+  return (
+    <div className="py-16 flex flex-col items-center justify-center text-center px-4">
+      <div className="h-12 w-12 rounded-full bg-white/[0.04] border border-white/[0.06] flex items-center justify-center mb-4">
+        <Users size={18} className="text-white/35" />
       </div>
-      <div className="text-[14px] text-white/80 font-medium">
-        No leads found
-      </div>
-      <div className="text-[12px] text-white/45 mt-1 max-w-sm">
-        {query
-          ? `Nothing matched "${query}". Try a different search or status filter.`
-          : "No leads match the selected filters."}
-      </div>
+      <p className="text-[14px] font-medium text-white/80">
+        {hasFilters ? "No leads matched" : "No leads yet"}
+      </p>
+      <p className="text-[12px] text-white/40 mt-1 max-w-xs">
+        {hasFilters
+          ? "Try adjusting your search or status filter."
+          : "Add your first lead to get started."}
+      </p>
+      {hasFilters && (
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={onClear}
+          className="mt-3 text-white/55 hover:text-white text-[12px]"
+        >
+          Clear filters
+        </Button>
+      )}
     </div>
   );
 }

@@ -17,6 +17,8 @@ import Settings from "@/pages/Settings";
 import Documentation from "@/pages/Documentation";
 import ProtectedRoute from "@/router/ProtectedRoute";
 import { Link } from "react-router-dom";
+import WorkflowBuilder from "@/pages/workflows/WorkflowBuilder";
+import CampaignMonitor from "@/pages/campaigns/CampaignMonitor";
 
 
 function NotFound() {
@@ -147,6 +149,24 @@ export const router =
       element: (
         <ProtectedRoute>
           <Documentation />
+        </ProtectedRoute>
+      ),
+    },
+
+    {
+      path: "/campaigns/:campaignId/workflow",
+      element: (
+        <ProtectedRoute>
+          <WorkflowBuilder />
+        </ProtectedRoute>
+      ),
+    },
+
+    {
+      path: "/campaigns/:campaignId/monitor",
+      element: (
+        <ProtectedRoute>
+          <CampaignMonitor />
         </ProtectedRoute>
       ),
     },

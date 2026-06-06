@@ -66,3 +66,24 @@ class Execution(BaseModel):
         nullable=True,
         index=True,
     )
+
+    # ----------------------------------------------------------------- #
+    # Graph-aware execution tracking (Phase 2A).
+    # NULL values indicate a legacy flat execution — all existing scheduler
+    # and worker code paths treat NULL as "use legacy linear behaviour".
+    # ----------------------------------------------------------------- #
+
+    # Which node in the workflow graph this execution is currently at.
+    # NULL for legacy executions that predate node-based workflows.
+    current_node_id: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        index=True,
+    )
+
+    # Accumulated per-node outputs for multi-step graph traversal.
+    # Keyed by node id; NULL until the first node completes.
+    node_outputs: Mapped[dict | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )

@@ -1326,14 +1326,60 @@ class TelephonyService:
             execution = db.get(Execution, execution_id)
             if execution is None:
                 return
+
             retry_config, voicemail_config = _campaign_configs(db, execution)
+
+            # For graph-based executions we need to advance the graph pointer
+            # after the CALL completes.  Defer the commit so we can mutate the
+            # execution once more before _db_scope flushes on exit.
+            is_graph = execution.current_node_id is not None
             process_outcome(
                 db,
                 execution,
                 outcome,
                 retry_config=retry_config,
                 voicemail_config=voicemail_config,
+                commit=not is_graph,
             )
+
+            if not is_graph:
+                return  # Legacy path: already committed by process_outcome.
+
+            # Graph path ─────────────────────────────────────────────────────
+            # process_outcome set execution.status to one of:
+            #   "completed"  → non-retryable outcome (call succeeded / opted-out)
+            #   "failed"     → retryable + retry scheduled or exhausted
+            #
+            # On "completed": advance current_node_id to the next node and
+            # re-enqueue so the scheduler dispatches the rest of the graph on
+            # the next tick.  The CALL node's id stays recorded via node_outputs.
+            #
+            # On "failed": execution.retry_status is "scheduled" (backoff
+            # pending) or "exhausted" — the existing retry machinery handles
+            # both without any graph-specific logic.  current_node_id stays on
+            # the CALL node so the re-dispatched execution retries the call.
+            if execution.status != "completed":
+                return  # _db_scope commits the retry/failure state.
+
+            from modules.campaign.workflow_model import Workflow
+            from modules.campaign.workflow_service import WorkflowService
+
+            workflow = db.get(Workflow, execution.workflow_id)
+            if workflow is None or not workflow.nodes:
+                # Workflow missing or not a graph workflow — nothing to do.
+                return
+
+            node_id = execution.current_node_id
+            next_nodes = WorkflowService.get_next_nodes(workflow, node_id)
+            if not next_nodes:
+                # CALL was the terminal node — execution stays completed.
+                return
+
+            # Re-enqueue at the next node; scheduler dispatches on next tick.
+            execution.current_node_id = next_nodes[0]["id"]
+            execution.status = "queued"
+            execution.retry_status = "pending"
+            # _db_scope commits on exit.
 
     # ------------------------------------------------------------------
     # Retry / cancel

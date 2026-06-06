@@ -1,31 +1,71 @@
 """Persistence models for the leads module.
 
-A ``Lead`` is an org-scoped contact record. Leads optionally belong to a
-``LeadList`` so users can segment them by campaign, source, etc. Both
-tables are tenant-scoped via ``organization_id`` and rely on a unique
-constraint on the *normalized* phone (digits only, with country code) to
-enforce duplicate detection at the database boundary — defense in depth
-behind the validator that runs on upload.
+Design decisions
+----------------
+* Lead ↔ LeadList is **many-to-many** via ``lead_list_memberships`` so a
+  single lead can belong to multiple lists / campaigns without duplicating
+  contact data.
+* ``phone_normalized`` (digits-only) enforces per-org uniqueness at the DB
+  layer and powers fast duplicate detection regardless of how users format
+  numbers (+1-555-555-5555 vs 15555555555 etc).
+* ``extra_data`` is a free-form JSON blob for arbitrary per-lead metadata
+  (CRM IDs, custom attributes from imports, etc.).  The column is named
+  ``extra_data`` to avoid shadowing SQLAlchemy's reserved ``metadata``
+  descriptor on ``DeclarativeBase``.
+* Tenant isolation is enforced at every row via ``organization_id``.
 """
 
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     ARRAY,
+    Column,
+    DateTime,
     ForeignKey,
     Index,
-    Integer,
     JSON,
     String,
+    Table,
     Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from database.base import BaseModel
+from database.base import Base, BaseModel
 
+
+# ---------------------------------------------------------------------------
+# Many-to-many association table (no extra columns needed here)
+# ---------------------------------------------------------------------------
+
+lead_list_memberships = Table(
+    "lead_list_memberships",
+    Base.metadata,
+    Column(
+        "lead_id",
+        ForeignKey("leads.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "lead_list_id",
+        ForeignKey("lead_lists.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "created_at",
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
+# Lead status vocabulary
+# ---------------------------------------------------------------------------
 
 LEAD_STATUS_NEW = "new"
 LEAD_STATUS_CONTACTED = "contacted"
@@ -44,23 +84,13 @@ ALL_LEAD_STATUSES = frozenset(
 )
 
 
-ACTIVITY_TYPE_CALL = "call"
-ACTIVITY_TYPE_EMAIL = "email"
-ACTIVITY_TYPE_MEETING = "meeting"
-ACTIVITY_TYPE_NOTE = "note"
-
-ALL_ACTIVITY_TYPES = frozenset(
-    {
-        ACTIVITY_TYPE_CALL,
-        ACTIVITY_TYPE_EMAIL,
-        ACTIVITY_TYPE_MEETING,
-        ACTIVITY_TYPE_NOTE,
-    }
-)
+# ---------------------------------------------------------------------------
+# LeadList
+# ---------------------------------------------------------------------------
 
 
 class LeadList(BaseModel):
-    """A named, segmentable collection of leads."""
+    """A named, org-scoped collection of leads."""
 
     __tablename__ = "lead_lists"
 
@@ -69,20 +99,16 @@ class LeadList(BaseModel):
         nullable=False,
         index=True,
     )
-    created_by: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id"),
-        nullable=True,
-    )
 
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     description: Mapped[str | None] = mapped_column(
         String(500), nullable=True
     )
-    source: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    lead_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     leads: Mapped[list["Lead"]] = relationship(
-        "Lead", back_populates="lead_list", cascade="all, delete-orphan"
+        "Lead",
+        secondary="lead_list_memberships",
+        back_populates="lead_lists",
     )
 
     __table_args__ = (
@@ -92,8 +118,13 @@ class LeadList(BaseModel):
     )
 
 
+# ---------------------------------------------------------------------------
+# Lead
+# ---------------------------------------------------------------------------
+
+
 class Lead(BaseModel):
-    """A single lead. Phone is required + unique per org for dedupe."""
+    """A single contact record.  Phone is unique per org for dedupe."""
 
     __tablename__ = "leads"
 
@@ -102,47 +133,41 @@ class Lead(BaseModel):
         nullable=False,
         index=True,
     )
-    lead_list_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("lead_lists.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-    )
 
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    first_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    last_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
     phone: Mapped[str] = mapped_column(String(40), nullable=False)
-    # Normalized digits-only phone used for uniqueness + duplicate detection.
+    # Digits-only copy used for uniqueness constraint + duplicate detection.
     phone_normalized: Mapped[str] = mapped_column(
         String(32), nullable=False, index=True
     )
 
+    linkedin_url: Mapped[str | None] = mapped_column(
+        String(500), nullable=True
+    )
     company: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    industry: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    location: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    source: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    job_title: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
     status: Mapped[str] = mapped_column(
-        String(32), default=LEAD_STATUS_NEW, nullable=False, index=True
+        String(32),
+        default=LEAD_STATUS_NEW,
+        nullable=False,
+        index=True,
     )
 
     tags: Mapped[list[str] | None] = mapped_column(
         ARRAY(String), nullable=True
     )
-    # Free-form per-lead extras captured during upload (e.g. seniority,
-    # job title, custom CRM keys we don't have first-class columns for).
-    custom_fields: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Free-form arbitrary metadata (CRM ids, import extras, custom fields).
+    extra_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
-    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    lead_list: Mapped["LeadList | None"] = relationship(
-        "LeadList", back_populates="leads"
-    )
-
-    activities: Mapped[list["LeadActivity"]] = relationship(
-        "LeadActivity",
-        back_populates="lead",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
+    lead_lists: Mapped[list["LeadList"]] = relationship(
+        "LeadList",
+        secondary="lead_list_memberships",
+        back_populates="leads",
     )
 
     __table_args__ = (
@@ -154,13 +179,34 @@ class Lead(BaseModel):
     )
 
 
-class LeadActivity(BaseModel):
-    """A timestamped touchpoint logged against a lead.
+# Composite index: common access pattern "list leads for org, newest first".
+Index("ix_leads_org_created", Lead.organization_id, Lead.created_at)
 
-    Captures the kind of interaction (call / email / meeting / note),
-    free-form notes, the acting user, and — via ``created_at`` — the
-    moment it happened. Org-scoped for tenant isolation and indexed by
-    ``(lead_id, created_at)`` so a lead's history loads newest-first.
+
+# ---------------------------------------------------------------------------
+# LeadActivity vocabulary
+# ---------------------------------------------------------------------------
+
+ACTIVITY_EMAIL_SENT = "email_sent"
+ACTIVITY_EMAIL_FAILED = "email_failed"
+
+# LinkedIn activity types — constrained to VARCHAR(16) by the DB schema.
+ACTIVITY_LI_CONNECT = "li_connect"   # connection request sent
+ACTIVITY_LI_MESSAGE = "li_message"   # direct message sent
+ACTIVITY_LI_FAILED  = "li_failed"    # any LinkedIn action failure
+
+
+# ---------------------------------------------------------------------------
+# LeadActivity
+# ---------------------------------------------------------------------------
+
+
+class LeadActivity(BaseModel):
+    """An audit-trail entry for actions taken on a lead.
+
+    The table was created by migration ``m8h9i0j1k2l3``.
+    ``activity_type`` is constrained to ``VARCHAR(16)`` in the DB; all
+    registered constants are ≤ 12 characters.
     """
 
     __tablename__ = "lead_activities"
@@ -175,27 +221,14 @@ class LeadActivity(BaseModel):
         nullable=False,
         index=True,
     )
+    # ``user_id`` is NULL for system-generated activities (e.g. campaign email).
     user_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id"),
         nullable=True,
     )
-
-    activity_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    # Short identifier; see ACTIVITY_* constants above.
+    activity_type: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+    )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    lead: Mapped["Lead"] = relationship("Lead", back_populates="activities")
-
-
-# Common access pattern: "list leads for org, newest first".
-Index(
-    "ix_leads_org_created",
-    Lead.organization_id,
-    Lead.created_at,
-)
-
-# A lead's activity history, newest-first.
-Index(
-    "ix_lead_activities_lead_created",
-    LeadActivity.lead_id,
-    LeadActivity.created_at,
-)

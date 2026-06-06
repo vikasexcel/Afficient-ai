@@ -1,3 +1,5 @@
+// Lead management types — Phase 1
+
 export type LeadStatus =
   | "new"
   | "contacted"
@@ -5,138 +7,99 @@ export type LeadStatus =
   | "converted"
   | "lost";
 
-export type Lead = {
+export interface Lead {
   id: string;
-  lead_list_id: string | null;
-  name: string;
+  organization_id: string;
+  first_name: string;
+  last_name: string | null;
   email: string | null;
   phone: string;
+  linkedin_url: string | null;
   company: string | null;
-  industry: string | null;
-  location: string | null;
-  source: string | null;
+  job_title: string | null;
   status: LeadStatus;
   tags: string[] | null;
-  custom_fields: Record<string, unknown> | null;
-  notes: string | null;
+  extra_data: Record<string, unknown> | null;
+  lead_list_ids: string[];
   created_at: string;
   updated_at: string;
-};
+}
 
-export type LeadList = {
+export interface LeadList {
   id: string;
+  organization_id: string;
   name: string;
   description: string | null;
-  source: string | null;
-  lead_count: number;
   created_at: string;
   updated_at: string;
-};
+}
 
-export type ActivityType = "call" | "email" | "meeting" | "note";
+// --------------------------------------------------------------------------
+// Request payloads
+// --------------------------------------------------------------------------
 
-export type LeadActivity = {
-  id: string;
-  lead_id: string;
-  user_id: string | null;
-  activity_type: ActivityType;
-  notes: string | null;
-  created_at: string;
-};
-
-export type CreateLeadInput = {
-  name: string;
-  phone: string;
+export interface CreateLeadInput {
+  first_name: string;
+  last_name?: string | null;
   email?: string | null;
+  phone: string;
+  linkedin_url?: string | null;
   company?: string | null;
-  industry?: string | null;
-  location?: string | null;
-  source?: string | null;
+  job_title?: string | null;
   status?: LeadStatus;
-  lead_list_id?: string | null;
   tags?: string[] | null;
-};
+  extra_data?: Record<string, unknown> | null;
+  lead_list_ids?: string[] | null;
+}
 
-export type UpdateLeadInput = {
-  name?: string;
+export interface UpdateLeadInput {
+  first_name?: string;
+  last_name?: string | null;
+  email?: string | null;
   phone?: string;
-  email?: string | null;
+  linkedin_url?: string | null;
   company?: string | null;
-  industry?: string | null;
+  job_title?: string | null;
   status?: LeadStatus;
   tags?: string[] | null;
-};
+  extra_data?: Record<string, unknown> | null;
+}
 
-/** A canonical column id our auto-mapper understands. */
-export type LeadColumnId =
-  | "name"
-  | "email"
-  | "phone"
-  | "company"
-  | "industry"
-  | "location"
-  | "tags";
-
-export type DetectedColumns = Record<LeadColumnId, string | null>;
-
-export type ParsedRowStatus = "valid" | "invalid" | "duplicate";
-
-export type ParsedRow = {
-  /** 1-indexed row number that matches the user's spreadsheet (header = 1). */
-  row_number: number;
-  name: string | null;
-  email: string | null;
-  phone: string | null;
-  company: string | null;
-  industry: string | null;
-  location: string | null;
-  tags: string[] | null;
-  custom_fields: Record<string, string> | null;
-  status: ParsedRowStatus;
-  errors: string[];
-};
-
-export type UploadStats = {
-  total: number;
-  valid: number;
-  invalid: number;
-  duplicate: number;
-};
-
-export type UploadPreview = {
-  rows: ParsedRow[];
-  detected_columns: DetectedColumns;
-  stats: UploadStats;
-};
-
-export type UploadSegmentation = {
-  industry: string | null;
-  location: string | null;
-  tags: string[];
-  custom_fields: Record<string, string>;
-};
-
-export type CommitRow = {
+export interface CreateLeadListInput {
   name: string;
-  email: string | null;
-  phone: string;
-  company: string | null;
-  industry: string | null;
-  location: string | null;
-  tags: string[] | null;
-  custom_fields: Record<string, string> | null;
-};
+  description?: string | null;
+}
 
-export type CommitUploadPayload = {
-  rows: CommitRow[];
-  segmentation: UploadSegmentation;
-  lead_list_id: string | null;
-  new_list_name: string | null;
-  source: string | null;
-};
+export interface UpdateLeadListInput {
+  name?: string;
+  description?: string | null;
+}
 
-export type CommitUploadResult = {
-  inserted: number;
-  skipped_duplicates: number;
-  lead_list: LeadList;
-};
+// --------------------------------------------------------------------------
+// Response shapes
+// --------------------------------------------------------------------------
+
+export interface LeadListLeadsResponse {
+  leads: Lead[];
+  total: number;
+}
+
+export interface LeadListResponse {
+  lead_lists: LeadList[];
+}
+
+export interface MembershipResponse {
+  added?: number;
+  removed?: number;
+  already_member?: number;
+  not_member?: number;
+}
+
+// --------------------------------------------------------------------------
+// Helpers
+// --------------------------------------------------------------------------
+
+/** Return "First Last" or just "First" when last_name is absent. */
+export function leadFullName(lead: Pick<Lead, "first_name" | "last_name">): string {
+  return [lead.first_name, lead.last_name].filter(Boolean).join(" ");
+}

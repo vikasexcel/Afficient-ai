@@ -1,21 +1,28 @@
-"""Business logic for campaigns, workflows, and executions.
+"""Campaign lifecycle orchestration.
 
-Execution intentionally runs in-process (no Celery yet). Activation loads
-the assigned playbook + lead list, enqueues one execution per lead (subject
-to schedule + business hours), and the worker talks to the AI module via
-:func:`run_execution`.
+``CampaignService`` is responsible for campaign-level concerns only:
+
+* CRUD lifecycle (create / read / update / delete).
+* Activation — scheduling checks, workflow creation, lead enqueuing.
+* Pause / resume — campaign + workflow state transitions.
+* Voicemail / AMD configuration.
+* Metrics orchestration (delegates to ``CampaignScheduler``).
+
+Workflow-specific logic lives in :class:`~modules.campaign.workflow_service.WorkflowService`.
+Execution-specific logic lives in :class:`~modules.campaign.execution_service.ExecutionService`.
+Data access lives in :mod:`modules.campaign.repository`.
 """
 
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from common.logging import get_logger
-from modules.campaign.execution_model import Execution
+from modules.campaign.execution_service import ExecutionService
 from modules.campaign.model import (
     CAMPAIGN_STATUS_ACTIVE,
     CAMPAIGN_STATUS_DRAFT,
@@ -23,22 +30,19 @@ from modules.campaign.model import (
     CAMPAIGN_STATUS_SCHEDULED,
     Campaign,
 )
-from modules.campaign.repository import (
-    CampaignRepository,
-    ExecutionRepository,
-    WorkflowRepository,
-)
-from modules.campaign.scheduling import (
-    compute_scheduled_at,
-    is_within_business_hours,
-)
+from modules.campaign.repository import CampaignRepository
 from modules.campaign.schema import (
     CampaignOut,
     CreateCampaign,
     UpdateCampaign,
     is_valid_status,
 )
+from modules.campaign.scheduling import (
+    compute_scheduled_at,
+    is_within_business_hours,
+)
 from modules.campaign.workflow_model import Workflow
+from modules.campaign.workflow_service import WorkflowService
 from modules.campaign.worker import run_execution
 
 log = get_logger("campaign.service")
@@ -315,21 +319,26 @@ class CampaignService:
 
     @staticmethod
     def activate(db: Session, campaign: Campaign) -> dict:
-        # Idempotency: reuse the live workflow if one already exists.
-        existing = (
-            db.query(Workflow)
-            .filter(Workflow.campaign_id == campaign.id)
-            .filter(Workflow.state == "active")
-            .first()
+        # Idempotency guard: reuse the live workflow when one already exists.
+        # A DB-level partial unique index on (campaign_id) WHERE state='active'
+        # enforces this at the storage layer; this check surfaces a clean
+        # response rather than letting the IntegrityError bubble up.
+        existing = WorkflowService.get_active_workflow(
+            db, campaign.id, lock=True
         )
         if existing:
+            log.warning(
+                "campaign.activate.already_active",
+                campaign_id=str(campaign.id),
+                workflow_id=str(existing.id),
+            )
             return {
                 "workflow_id": str(existing.id),
                 "state": existing.state,
                 "already_active": True,
             }
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # 1) Future schedule -> hold as "scheduled", don't dial yet.
         if campaign.scheduled_at is not None and campaign.scheduled_at > now:
@@ -361,8 +370,9 @@ class CampaignService:
             }
 
         # 3) Start now: create the workflow and enqueue per-lead executions.
-        workflow = Workflow(campaign_id=campaign.id, state="active")
-        WorkflowRepository.create(db, workflow)
+        workflow = WorkflowService.create_workflow(
+            db, campaign_id=campaign.id, state="active"
+        )
         campaign.status = CAMPAIGN_STATUS_ACTIVE
 
         enqueued = 0
@@ -386,59 +396,78 @@ class CampaignService:
     def _enqueue_leads(
         db: Session, campaign: Campaign, workflow: Workflow
     ) -> int:
-        """Create one queued :class:`Execution` per lead in the list."""
+        """Create one queued :class:`Execution` per lead in the list.
 
+        For legacy workflows (``workflow.nodes == []``) ``current_node_id``
+        is ``None`` so the existing scheduler and worker handle them without
+        changes.  For graph-based workflows the entry node id is resolved
+        and stamped on each execution so the worker knows which node to run
+        first.
+        """
         leads = CampaignRepository.leads_for_list(
             db,
             campaign.organization_id,
             campaign.lead_list_id,
             limit=MAX_LEADS_PER_ACTIVATION,
         )
+
+        entry_node_id: str | None = None
+        if workflow.nodes:
+            try:
+                entry_node_id = WorkflowService.get_entry_node(workflow)["id"]
+            except ValueError:
+                log.warning(
+                    "campaign.enqueue.no_entry_node",
+                    workflow_id=str(workflow.id),
+                    campaign_id=str(campaign.id),
+                )
+
         count = 0
         for lead in leads:
-            execution = Execution(
+            ExecutionService.create_execution(
+                db,
                 workflow_id=workflow.id,
-                status="queued",
                 lead_id=lead.id,
                 context={
                     "campaign_id": str(campaign.id),
                     "playbook_id": str(campaign.playbook_id),
                     "lead": {
                         "id": str(lead.id),
-                        "name": lead.name,
+                        "name": " ".join(
+                            filter(None, [lead.first_name, lead.last_name])
+                        ),
+                        "first_name": lead.first_name or "",
+                        "last_name": lead.last_name or "",
                         "phone": lead.phone,
-                        "company": lead.company,
-                        "email": lead.email,
+                        "company": lead.company or "",
+                        "email": lead.email or "",
+                        "job_title": lead.job_title or "",
+                        "linkedin_url": lead.linkedin_url or "",
                     },
                 },
+                current_node_id=entry_node_id,
             )
-            ExecutionRepository.create(db, execution)
             count += 1
         return count
 
     # ------------------------------------------------------------------ #
-    # Execute a single queued execution (or a generic one for legacy flow)
+    # Execute a single queued execution
     # ------------------------------------------------------------------ #
 
     @staticmethod
     async def execute(db: Session, workflow: Workflow) -> dict:
         """Run the next queued execution for ``workflow``.
 
-        Falls back to creating a generic execution when the workflow has no
-        queued leads (preserves the legacy single-shot behaviour).
+        Returns ``status="no_work"`` when no queued execution exists.
         """
-
-        execution = (
-            db.query(Execution)
-            .filter(Execution.workflow_id == workflow.id)
-            .filter(Execution.status == "queued")
-            .order_by(Execution.created_at.asc())
-            .first()
-        )
+        execution = ExecutionService.get_next_queued_execution(db, workflow.id)
         if execution is None:
-            execution = Execution(workflow_id=workflow.id, status="queued")
-            ExecutionRepository.create(db, execution)
-            db.commit()
+            return {
+                "execution_id": None,
+                "status": "no_work",
+                "output": None,
+                "lead_id": None,
+            }
 
         await run_execution(db, execution)
 
@@ -463,14 +492,9 @@ class CampaignService:
                 f"can only pause an active campaign (status={campaign.status})",
             )
         campaign.status = CAMPAIGN_STATUS_PAUSED
-        workflow = (
-            db.query(Workflow)
-            .filter(Workflow.campaign_id == campaign.id)
-            .filter(Workflow.state == "active")
-            .first()
-        )
+        workflow = WorkflowService.get_active_workflow(db, campaign.id)
         if workflow is not None:
-            workflow.state = "paused"
+            WorkflowService.update_state(db, workflow, "paused")
         db.commit()
         log.info("campaign.paused", campaign_id=str(campaign.id))
         return {"campaign_id": str(campaign.id), "status": campaign.status}
@@ -485,15 +509,9 @@ class CampaignService:
                 f"can only resume a paused campaign (status={campaign.status})",
             )
         campaign.status = CAMPAIGN_STATUS_ACTIVE
-        workflow = (
-            db.query(Workflow)
-            .filter(Workflow.campaign_id == campaign.id)
-            .filter(Workflow.state == "paused")
-            .order_by(Workflow.created_at.desc())
-            .first()
-        )
+        workflow = WorkflowService.get_paused_workflow(db, campaign.id)
         if workflow is not None:
-            workflow.state = "active"
+            WorkflowService.update_state(db, workflow, "active")
         db.commit()
         log.info("campaign.resumed", campaign_id=str(campaign.id))
         return {"campaign_id": str(campaign.id), "status": campaign.status}

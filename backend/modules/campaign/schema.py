@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from modules.campaign.model import ALL_CAMPAIGN_STATUSES
 
@@ -182,3 +182,202 @@ class CampaignListResponse(BaseModel):
 
 def is_valid_status(status: str) -> bool:
     return status in ALL_CAMPAIGN_STATUSES
+
+
+# ---------------------------------------------------------------------------
+# Workflow graph schemas  (Phase 3A)
+# ---------------------------------------------------------------------------
+
+#: Node types recognised by the execution engine.
+VALID_NODE_TYPES: frozenset[str] = frozenset(
+    {"CALL", "WAIT", "EMAIL", "LINKEDIN", "CONDITION", "STOP"}
+)
+
+
+class WorkflowNodeSchema(BaseModel):
+    """A single node in a workflow graph.
+
+    ``type`` is validated against the execution-engine registry.  All
+    node-type-specific fields (``subject``, ``body``, ``duration``, ``unit``,
+    ``action``, ``message``, ``condition_type``, ``source_node``) are passed
+    through as-is via ``extra="allow"`` so the schema remains forward-compatible
+    when new node types are added.
+
+    Example nodes::
+
+        {"id": "em_1",   "type": "EMAIL",    "subject": "Hi {{firstName}}", "body": "..."}
+        {"id": "wait_1", "type": "WAIT",     "duration": 24, "unit": "hours"}
+        {"id": "li_1",   "type": "LINKEDIN", "action": "CONNECT", "message": "..."}
+        {"id": "cond_1", "type": "CONDITION","condition_type": "EMAIL_SENT", "source_node": "em_1"}
+        {"id": "call_1", "type": "CALL"}
+        {"id": "stop_1", "type": "STOP"}
+    """
+
+    id: str = Field(min_length=1, max_length=64)
+    type: Literal["CALL", "WAIT", "EMAIL", "LINKEDIN", "CONDITION", "STOP"]
+    label: str | None = Field(default=None, max_length=128)
+
+    model_config = ConfigDict(extra="allow")
+
+    def to_node_dict(self) -> dict:
+        """Return a plain dict for DB storage (includes all extra fields)."""
+        return self.model_dump(exclude_none=True)
+
+
+class WorkflowEdgeSchema(BaseModel):
+    """A directed edge between two nodes.
+
+    ``condition`` is only meaningful on edges leaving a CONDITION node:
+    ``"TRUE"`` / ``"FALSE"`` (case-insensitive on write; stored upper-cased).
+
+    Example edges::
+
+        {"id": "e1", "source": "em_1",   "target": "wait_1"}
+        {"id": "e2", "source": "cond_1", "target": "call_1", "condition": "TRUE"}
+        {"id": "e3", "source": "cond_1", "target": "stop_1", "condition": "FALSE"}
+    """
+
+    id: str = Field(min_length=1, max_length=64)
+    source: str = Field(min_length=1, max_length=64)
+    target: str = Field(min_length=1, max_length=64)
+    condition: str | None = Field(default=None, max_length=16)
+    label: str | None = Field(default=None, max_length=128)
+
+    @field_validator("condition", mode="before")
+    @classmethod
+    def _normalise_condition(cls, v: Any) -> str | None:
+        if v is None:
+            return None
+        upper = str(v).strip().upper()
+        if upper not in ("TRUE", "FALSE", ""):
+            raise ValueError(
+                "edge 'condition' must be 'TRUE', 'FALSE', or null"
+            )
+        return upper or None
+
+    def to_edge_dict(self) -> dict:
+        return self.model_dump(exclude_none=True)
+
+
+class WorkflowGraphSchema(BaseModel):
+    """PUT request body — the complete graph definition for a workflow."""
+
+    nodes: list[WorkflowNodeSchema] = Field(min_length=1)
+    edges: list[WorkflowEdgeSchema] = Field(default_factory=list)
+
+    def to_nodes_list(self) -> list[dict]:
+        return [n.to_node_dict() for n in self.nodes]
+
+    def to_edges_list(self) -> list[dict]:
+        return [e.to_edge_dict() for e in self.edges]
+
+
+class WorkflowGraphResponse(BaseModel):
+    """GET response — the active workflow graph for a campaign."""
+
+    workflow_id: uuid.UUID
+    campaign_id: uuid.UUID
+    state: str
+    nodes: list[dict[str, Any]]
+    edges: list[dict[str, Any]]
+    node_count: int
+    edge_count: int
+    is_graph: bool
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WorkflowValidationResponse(BaseModel):
+    """POST /validate response — structured validation result."""
+
+    valid: bool
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3C — Workflow versioning schemas
+# ---------------------------------------------------------------------------
+
+
+class WorkflowVersionSummary(BaseModel):
+    """One row in the version history list — no graph payload for brevity."""
+
+    version: int
+    workflow_id: uuid.UUID
+    created_at: datetime
+    created_by: uuid.UUID | None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WorkflowVersionDetail(BaseModel):
+    """Full version snapshot including graph payload."""
+
+    version: int
+    workflow_id: uuid.UUID
+    nodes: list[Any]
+    edges: list[Any]
+    created_at: datetime
+    created_by: uuid.UUID | None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WorkflowVersionListResponse(BaseModel):
+    """GET /workflow/versions response."""
+
+    workflow_id: uuid.UUID
+    versions: list[WorkflowVersionSummary]
+    total: int
+
+
+class WorkflowRestoreResponse(BaseModel):
+    """POST /workflow/versions/{version}/restore response."""
+
+    workflow_id: uuid.UUID
+    restored_from_version: int
+    new_version: int
+    nodes: list[Any]
+    edges: list[Any]
+
+
+# ---------------------------------------------------------------------------
+# Campaign Monitor payload (Phase 4F)
+# ---------------------------------------------------------------------------
+
+
+class MonitorExecution(BaseModel):
+    """Flattened execution + lead row for the monitor dashboard."""
+
+    id: uuid.UUID
+    status: str
+    lead_id: uuid.UUID | None
+    lead_name: str | None
+    lead_email: str | None
+    lead_phone: str | None
+    current_node_id: str | None
+    attempt_number: int
+    outcome: str | None
+    retry_status: str | None
+    next_retry_at: datetime | None
+    last_failure_reason: str | None
+    node_outputs: dict[str, Any] | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class CampaignMonitorPayload(BaseModel):
+    """GET /campaigns/{id}/monitor — single dashboard payload."""
+
+    campaign_id: uuid.UUID
+    campaign_name: str
+    campaign_status: str
+    campaign_created_at: datetime
+    lead_list_id: uuid.UUID | None
+    metrics: dict[str, Any]
+    executions: list[MonitorExecution]
+    workflow_nodes: list[Any]
+    workflow_edges: list[Any]

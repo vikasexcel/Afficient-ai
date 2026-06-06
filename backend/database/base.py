@@ -1,11 +1,12 @@
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import DateTime
-from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy.orm import Mapped
-from sqlalchemy.orm import mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from datetime import datetime
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class Base(DeclarativeBase):
@@ -22,11 +23,11 @@ class BaseModel(Base):
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=_utcnow,
     )
 
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=_utcnow,
+        onupdate=_utcnow,
     )

@@ -24,6 +24,7 @@ from modules.playbook.router import router as playbook_router
 from modules.leads.router import list_router as lead_lists_router
 from modules.leads.router import router as leads_router
 from modules.tts.router import router as tts_router
+from modules.campaign.template_router import router as workflow_templates_router
 
 
 @asynccontextmanager
@@ -130,6 +131,7 @@ for r in (
     playbook_router,
     leads_router,
     lead_lists_router,
+    workflow_templates_router,
 ):
     app.include_router(r, prefix=settings.API_PREFIX)
 

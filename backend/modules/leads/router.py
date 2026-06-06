@@ -1,10 +1,10 @@
-"""HTTP API for lead management + CSV upload."""
+"""HTTP API for lead management."""
 
 from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from common.security.authorization import requires
@@ -12,19 +12,17 @@ from common.security.roles import Role
 from database.dependencies import get_db
 from modules.auth.tenant import get_current_tenant
 from modules.leads.schema import (
-    CommitUploadInput,
-    CommitUploadResponse,
-    CreateLeadActivityInput,
+    AddLeadsToListInput,
     CreateLeadInput,
     CreateLeadListInput,
-    LeadActivityListResponse,
-    LeadActivityOut,
     LeadListLeadsResponse,
     LeadListOut,
     LeadListResponse,
     LeadOut,
+    MembershipResponse,
+    RemoveLeadsFromListInput,
     UpdateLeadInput,
-    UploadPreviewResponse,
+    UpdateLeadListInput,
 )
 from modules.leads.service import LeadsService
 
@@ -52,7 +50,9 @@ def list_lead_lists(
     tenant=Depends(get_current_tenant),
 ):
     rows = LeadsService.list_lead_lists(db, _org_id(tenant))
-    return LeadListResponse(lead_lists=[LeadListOut.model_validate(r) for r in rows])
+    return LeadListResponse(
+        lead_lists=[LeadListOut.model_validate(r) for r in rows]
+    )
 
 
 @list_router.post("", response_model=LeadListOut, status_code=201)
@@ -62,14 +62,57 @@ def create_lead_list(
     tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
 ):
     ll = LeadsService.create_lead_list(
-        db,
-        _org_id(tenant),
-        _user_id(tenant),
-        name=data.name,
-        description=data.description,
-        source=data.source,
+        db, _org_id(tenant), _user_id(tenant), data
     )
     return LeadListOut.model_validate(ll)
+
+
+@list_router.patch("/{list_id}", response_model=LeadListOut)
+def update_lead_list(
+    list_id: uuid.UUID,
+    data: UpdateLeadListInput,
+    db: Session = Depends(get_db),
+    tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
+):
+    ll = LeadsService.update_lead_list(
+        db, _org_id(tenant), _user_id(tenant), list_id, data
+    )
+    return LeadListOut.model_validate(ll)
+
+
+@list_router.delete("/{list_id}", status_code=204)
+def delete_lead_list(
+    list_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    tenant=Depends(requires(Role.OWNER, Role.ADMIN)),
+):
+    LeadsService.delete_lead_list(db, _org_id(tenant), list_id)
+
+
+@list_router.post("/{list_id}/leads", response_model=MembershipResponse, status_code=200)
+def add_leads_to_list(
+    list_id: uuid.UUID,
+    data: AddLeadsToListInput,
+    db: Session = Depends(get_db),
+    tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
+):
+    result = LeadsService.add_leads_to_list(
+        db, _org_id(tenant), list_id, data.lead_ids
+    )
+    return MembershipResponse(**result)
+
+
+@list_router.delete("/{list_id}/leads", response_model=MembershipResponse, status_code=200)
+def remove_leads_from_list(
+    list_id: uuid.UUID,
+    data: RemoveLeadsFromListInput,
+    db: Session = Depends(get_db),
+    tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
+):
+    result = LeadsService.remove_leads_from_list(
+        db, _org_id(tenant), list_id, data.lead_ids
+    )
+    return MembershipResponse(**result)
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +124,7 @@ def create_lead_list(
 def list_leads(
     lead_list_id: uuid.UUID | None = Query(default=None),
     search: str | None = Query(default=None, max_length=255),
+    status: str | None = Query(default=None),
     limit: int = Query(default=200, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -91,6 +135,7 @@ def list_leads(
         _org_id(tenant),
         lead_list_id=lead_list_id,
         search=search,
+        status=status,
         limit=limit,
         offset=offset,
     )
@@ -106,42 +151,10 @@ def create_lead(
     db: Session = Depends(get_db),
     tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
 ):
-    lead = LeadsService.create_lead(db, _org_id(tenant), data)
+    lead = LeadsService.create_lead(
+        db, _org_id(tenant), _user_id(tenant), data
+    )
     return LeadOut.model_validate(lead)
-
-
-# Static upload paths must be registered before ``/{lead_id}`` so they are
-# never mistaken for a UUID path segment on older Starlette versions.
-@router.post("/upload/preview", response_model=UploadPreviewResponse)
-async def upload_preview(
-    file: UploadFile = File(..., description="CSV file with header row"),
-    db: Session = Depends(get_db),
-    tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
-):
-    if not (file.filename or "").lower().endswith(".csv"):
-        raise HTTPException(400, "Only .csv files are supported")
-    raw = await file.read()
-    if not raw:
-        raise HTTPException(400, "Uploaded file is empty")
-    return LeadsService.preview_upload(
-        db, _org_id(tenant), raw_bytes=raw
-    )
-
-
-@router.post("/upload/commit", response_model=CommitUploadResponse)
-def upload_commit(
-    payload: CommitUploadInput,
-    db: Session = Depends(get_db),
-    tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
-):
-    result = LeadsService.commit_upload(
-        db, _org_id(tenant), _user_id(tenant), payload
-    )
-    return CommitUploadResponse(
-        inserted=result["inserted"],
-        skipped_duplicates=result["skipped_duplicates"],
-        lead_list=LeadListOut.model_validate(result["lead_list"]),
-    )
 
 
 @router.get("/{lead_id}", response_model=LeadOut)
@@ -161,7 +174,9 @@ def update_lead(
     db: Session = Depends(get_db),
     tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
 ):
-    lead = LeadsService.update_lead(db, _org_id(tenant), lead_id, data)
+    lead = LeadsService.update_lead(
+        db, _org_id(tenant), _user_id(tenant), lead_id, data
+    )
     return LeadOut.model_validate(lead)
 
 
@@ -171,45 +186,6 @@ def delete_lead(
     db: Session = Depends(get_db),
     tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
 ):
-    LeadsService.delete_lead(db, _org_id(tenant), lead_id)
-
-
-# ---------------------------------------------------------------------------
-# Lead activities
-# ---------------------------------------------------------------------------
-
-
-@router.get(
-    "/{lead_id}/activities", response_model=LeadActivityListResponse
-)
-def list_lead_activities(
-    lead_id: uuid.UUID,
-    db: Session = Depends(get_db),
-    tenant=Depends(get_current_tenant),
-):
-    rows = LeadsService.list_activities(db, _org_id(tenant), lead_id)
-    return LeadActivityListResponse(
-        activities=[LeadActivityOut.model_validate(r) for r in rows]
+    LeadsService.delete_lead(
+        db, _org_id(tenant), _user_id(tenant), lead_id
     )
-
-
-@router.post(
-    "/{lead_id}/activities",
-    response_model=LeadActivityOut,
-    status_code=201,
-)
-def log_lead_activity(
-    lead_id: uuid.UUID,
-    data: CreateLeadActivityInput,
-    db: Session = Depends(get_db),
-    tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
-):
-    activity = LeadsService.log_activity(
-        db,
-        _org_id(tenant),
-        _user_id(tenant),
-        lead_id,
-        activity_type=data.activity_type,
-        notes=data.notes,
-    )
-    return LeadActivityOut.model_validate(activity)

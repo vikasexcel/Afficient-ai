@@ -1,19 +1,20 @@
-"""SQLAlchemy access for the leads module."""
+"""SQLAlchemy access layer for the leads module."""
 
 from __future__ import annotations
 
 import uuid
-from typing import Iterable
 
-from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy import delete, func, or_, select
+from sqlalchemy.orm import Session, selectinload
 
-from modules.leads.model import Lead, LeadActivity, LeadList
+from modules.leads.model import Lead, LeadList, lead_list_memberships
 
 
 class LeadListRepository:
     @staticmethod
-    def list_by_org(db: Session, organization_id: uuid.UUID) -> list[LeadList]:
+    def list_by_org(
+        db: Session, organization_id: uuid.UUID
+    ) -> list[LeadList]:
         stmt = (
             select(LeadList)
             .where(LeadList.organization_id == organization_id)
@@ -48,14 +49,23 @@ class LeadListRepository:
         return lead_list
 
     @staticmethod
-    def refresh_count(db: Session, list_id: uuid.UUID) -> int:
-        count = db.execute(
-            select(func.count(Lead.id)).where(Lead.lead_list_id == list_id)
-        ).scalar_one()
-        ll = db.get(LeadList, list_id)
-        if ll is not None:
-            ll.lead_count = int(count)
-        return int(count)
+    def update(
+        db: Session,
+        lead_list: LeadList,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> LeadList:
+        if name is not None:
+            lead_list.name = name.strip()
+        if description is not None:
+            lead_list.description = description
+        db.flush()
+        return lead_list
+
+    @staticmethod
+    def delete(db: Session, lead_list: LeadList) -> None:
+        db.delete(lead_list)
 
 
 class LeadRepository:
@@ -66,26 +76,40 @@ class LeadRepository:
         *,
         lead_list_id: uuid.UUID | None = None,
         search: str | None = None,
+        status: str | None = None,
         limit: int = 200,
         offset: int = 0,
     ) -> tuple[list[Lead], int]:
-        base = select(Lead).where(Lead.organization_id == organization_id)
+        base = (
+            select(Lead)
+            .where(Lead.organization_id == organization_id)
+            .options(selectinload(Lead.lead_lists))
+        )
+
         if lead_list_id is not None:
-            base = base.where(Lead.lead_list_id == lead_list_id)
+            # Filter to leads that are members of the given list.
+            base = base.where(
+                Lead.id.in_(
+                    select(lead_list_memberships.c.lead_id).where(
+                        lead_list_memberships.c.lead_list_id == lead_list_id
+                    )
+                )
+            )
+
+        if status is not None:
+            base = base.where(Lead.status == status)
 
         term = (search or "").strip()
         if term:
-            # Case-insensitive partial match across the same fields the
-            # frontend filters on: name, email, phone, company, industry,
-            # and tags. ``any_`` checks the Postgres ARRAY of tags.
             like = f"%{term.lower()}%"
             base = base.where(
                 or_(
-                    func.lower(Lead.name).like(like),
+                    func.lower(Lead.first_name).like(like),
+                    func.lower(func.coalesce(Lead.last_name, "")).like(like),
                     func.lower(func.coalesce(Lead.email, "")).like(like),
                     func.lower(Lead.phone).like(like),
                     func.lower(func.coalesce(Lead.company, "")).like(like),
-                    func.lower(func.coalesce(Lead.industry, "")).like(like),
+                    func.lower(func.coalesce(Lead.job_title, "")).like(like),
                     func.lower(
                         func.coalesce(
                             func.array_to_string(Lead.tags, ","), ""
@@ -94,15 +118,13 @@ class LeadRepository:
                 )
             )
 
-        total = db.execute(
-            select(func.count())
-            .select_from(base.subquery())
-        ).scalar_one()
+        total_stmt = select(func.count()).select_from(
+            base.order_by(None).subquery()
+        )
+        total = db.execute(total_stmt).scalar_one()
 
         stmt = (
-            base.order_by(Lead.created_at.desc())
-            .limit(limit)
-            .offset(offset)
+            base.order_by(Lead.created_at.desc()).limit(limit).offset(offset)
         )
         rows = list(db.execute(stmt).scalars())
         return rows, int(total)
@@ -111,8 +133,13 @@ class LeadRepository:
     def get(
         db: Session, organization_id: uuid.UUID, lead_id: uuid.UUID
     ) -> Lead | None:
-        stmt = select(Lead).where(
-            Lead.id == lead_id, Lead.organization_id == organization_id
+        stmt = (
+            select(Lead)
+            .where(
+                Lead.id == lead_id,
+                Lead.organization_id == organization_id,
+            )
+            .options(selectinload(Lead.lead_lists))
         )
         return db.execute(stmt).scalar_one_or_none()
 
@@ -127,12 +154,6 @@ class LeadRepository:
         return db.execute(stmt).scalar_one_or_none()
 
     @staticmethod
-    def create(db: Session, lead: Lead) -> Lead:
-        db.add(lead)
-        db.flush()
-        return lead
-
-    @staticmethod
     def existing_normalized_phones(
         db: Session, organization_id: uuid.UUID
     ) -> set[str]:
@@ -144,39 +165,49 @@ class LeadRepository:
         return {r[0] for r in rows if r[0]}
 
     @staticmethod
-    def bulk_insert(db: Session, leads: Iterable[Lead]) -> int:
-        count = 0
-        for lead in leads:
-            db.add(lead)
-            count += 1
-        if count:
-            db.flush()
-        return count
+    def create(db: Session, lead: Lead) -> Lead:
+        db.add(lead)
+        db.flush()
+        return lead
 
     @staticmethod
     def delete(db: Session, lead: Lead) -> None:
         db.delete(lead)
 
 
-class LeadActivityRepository:
+class LeadListMembershipRepository:
     @staticmethod
-    def create(db: Session, activity: LeadActivity) -> LeadActivity:
-        db.add(activity)
+    def add(
+        db: Session,
+        lead: Lead,
+        lead_list: LeadList,
+    ) -> bool:
+        """Add a lead to a list.  Returns True if added, False if already a member."""
+        if lead_list in lead.lead_lists:
+            return False
+        lead.lead_lists.append(lead_list)
         db.flush()
-        return activity
+        return True
 
     @staticmethod
-    def list_for_lead(
+    def remove(
         db: Session,
-        organization_id: uuid.UUID,
-        lead_id: uuid.UUID,
-    ) -> list[LeadActivity]:
-        stmt = (
-            select(LeadActivity)
-            .where(
-                LeadActivity.organization_id == organization_id,
-                LeadActivity.lead_id == lead_id,
+        lead: Lead,
+        lead_list: LeadList,
+    ) -> bool:
+        """Remove a lead from a list.  Returns True if removed, False if not a member."""
+        if lead_list not in lead.lead_lists:
+            return False
+        lead.lead_lists.remove(lead_list)
+        db.flush()
+        return True
+
+    @staticmethod
+    def clear_list(db: Session, lead_list_id: uuid.UUID) -> int:
+        """Remove all membership rows for a given list.  Returns row count."""
+        result = db.execute(
+            delete(lead_list_memberships).where(
+                lead_list_memberships.c.lead_list_id == lead_list_id
             )
-            .order_by(LeadActivity.created_at.desc())
         )
-        return list(db.execute(stmt).scalars())
+        return result.rowcount

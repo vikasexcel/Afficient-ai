@@ -9,4 +9,4 @@ from modules.livekit.model import LiveKitSession
 from modules.ai.model import AICall, AITranscriptEntry, AICallSummary
 from modules.telephony.model import TelephonyCall, TelephonyEvent
 from modules.playbook.model import Playbook, PlaybookField, PlaybookVersion
-from modules.leads.model import Lead, LeadList
+from modules.leads.model import Lead, LeadList, lead_list_memberships  # noqa: F401

@@ -1,5 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
-import { Loader2, UserPlus, Pencil } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Controller, useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
+import { Loader2, Pencil, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -20,9 +23,62 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { formatApiError } from "@/lib/apiError";
-import { createLead, listLeadLists, updateLead } from "@/services/lead";
+import { createLead, formatLeadError, listLeadLists, updateLead } from "@/services/leads";
+import { leadFullName } from "@/types/lead";
 import type { Lead, LeadList, LeadStatus } from "@/types/lead";
+
+// ---------------------------------------------------------------------------
+// Zod schema
+// ---------------------------------------------------------------------------
+
+const PHONE_RE = /^[+\d\s().-]+$/;
+
+const leadSchema = z.object({
+  first_name: z.string().trim().min(1, "First name is required").max(120),
+  last_name: z.string().trim().max(120).optional().or(z.literal("")),
+  email: z
+    .string()
+    .trim()
+    .email("Enter a valid email")
+    .optional()
+    .or(z.literal("")),
+  phone: z
+    .string()
+    .trim()
+    .min(1, "Phone is required")
+    .regex(PHONE_RE, "Phone contains invalid characters")
+    .refine(
+      (v) => v.replace(/\D/g, "").length >= 7,
+      "Phone needs at least 7 digits"
+    )
+    .refine(
+      (v) => v.replace(/\D/g, "").length <= 15,
+      "Phone is too long (max 15 digits)"
+    ),
+  linkedin_url: z
+    .string()
+    .trim()
+    .url("Enter a valid URL")
+    .optional()
+    .or(z.literal("")),
+  company: z.string().trim().max(255).optional().or(z.literal("")),
+  job_title: z.string().trim().max(120).optional().or(z.literal("")),
+  status: z.enum([
+    "new",
+    "contacted",
+    "qualified",
+    "converted",
+    "lost",
+  ] as const),
+  tags: z.string().trim().optional().or(z.literal("")),
+  lead_list_id: z.string().optional(),
+});
+
+type FormValues = z.infer<typeof leadSchema>;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 const STATUS_OPTIONS: { value: LeadStatus; label: string }[] = [
   { value: "new", label: "New" },
@@ -34,45 +90,37 @@ const STATUS_OPTIONS: { value: LeadStatus; label: string }[] = [
 
 const NO_LIST = "__none__";
 
-// Allow common phone formatting; require 7–15 digits (mirrors backend).
-const PHONE_ALLOWED = /^[+\d\s().\-]+$/;
-const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-
-type FormValues = {
-  name: string;
-  email: string;
-  phone: string;
-  company: string;
-  industry: string;
-  tagsRaw: string;
-  leadListId: string;
-  status: LeadStatus;
-};
-
-function leadToForm(lead: Lead | null): FormValues {
+function toForm(lead: Lead | null): FormValues {
   return {
-    name: lead?.name ?? "",
+    first_name: lead?.first_name ?? "",
+    last_name: lead?.last_name ?? "",
     email: lead?.email ?? "",
     phone: lead?.phone ?? "",
+    linkedin_url: lead?.linkedin_url ?? "",
     company: lead?.company ?? "",
-    industry: lead?.industry ?? "",
-    tagsRaw: (lead?.tags ?? []).join(", "),
-    leadListId: lead?.lead_list_id ?? NO_LIST,
+    job_title: lead?.job_title ?? "",
     status: lead?.status ?? "new",
+    tags: (lead?.tags ?? []).join(", "),
+    lead_list_id: lead?.lead_list_ids?.[0] ?? NO_LIST,
   };
 }
 
-function parseTags(raw: string): string[] {
-  return raw
+function parseTags(raw: string | undefined): string[] | null {
+  if (!raw?.trim()) return null;
+  const arr = raw
     .split(",")
     .map((t) => t.trim())
     .filter(Boolean);
+  return arr.length ? arr : null;
 }
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
 
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Provide a lead to edit; omit (or null) to add a new lead. */
   lead?: Lead | null;
   onSaved?: (lead: Lead) => void;
 };
@@ -84,94 +132,68 @@ export default function LeadFormDialog({
   onSaved,
 }: Props) {
   const isEdit = Boolean(lead);
-  const [values, setValues] = useState<FormValues>(() => leadToForm(lead));
-  const [errors, setErrors] = useState<Partial<Record<keyof FormValues, string>>>(
-    {}
-  );
-  const [submitting, setSubmitting] = useState(false);
   const [leadLists, setLeadLists] = useState<LeadList[]>([]);
 
-  // Reset the form whenever the dialog opens (or the target lead changes).
+  const {
+    register,
+    control,
+    handleSubmit,
+    reset,
+    formState: { errors, isSubmitting },
+  } = useForm<FormValues>({
+    resolver: zodResolver(leadSchema),
+    defaultValues: toForm(lead),
+  });
+
+  // Reset form when dialog opens or target lead changes.
   useEffect(() => {
     if (open) {
-      setValues(leadToForm(lead));
-      setErrors({});
-      void listLeadLists()
+      reset(toForm(lead));
+      listLeadLists()
         .then(setLeadLists)
         .catch(() => setLeadLists([]));
     }
-  }, [open, lead]);
+  }, [open, lead, reset]);
 
-  function set<K extends keyof FormValues>(key: K, value: FormValues[K]) {
-    setValues((v) => ({ ...v, [key]: value }));
-    setErrors((e) => ({ ...e, [key]: undefined }));
-  }
-
-  const validate = useMemo(
-    () => () => {
-      const next: Partial<Record<keyof FormValues, string>> = {};
-      if (!values.name.trim()) next.name = "Name is required";
-
-      const phone = values.phone.trim();
-      if (!phone) {
-        next.phone = "Phone is required";
-      } else if (!PHONE_ALLOWED.test(phone)) {
-        next.phone = "Phone contains invalid characters";
-      } else {
-        const digits = phone.replace(/\D/g, "");
-        if (digits.length < 7) next.phone = "Phone needs at least 7 digits";
-        else if (digits.length > 15) next.phone = "Phone is too long (max 15 digits)";
-      }
-
-      if (values.email.trim() && !EMAIL_RE.test(values.email.trim())) {
-        next.email = "Enter a valid email address";
-      }
-      return next;
-    },
-    [values]
-  );
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    const next = validate();
-    setErrors(next);
-    if (Object.keys(next).length > 0) return;
-
-    setSubmitting(true);
+  async function onSubmit(values: FormValues) {
+    const tags = parseTags(values.tags);
     try {
-      const tags = parseTags(values.tagsRaw);
       let saved: Lead;
       if (isEdit && lead) {
         saved = await updateLead(lead.id, {
-          name: values.name.trim(),
-          email: values.email.trim() || null,
-          phone: values.phone.trim(),
-          company: values.company.trim() || null,
-          industry: values.industry.trim() || null,
+          first_name: values.first_name,
+          last_name: values.last_name || null,
+          email: values.email || null,
+          phone: values.phone,
+          linkedin_url: values.linkedin_url || null,
+          company: values.company || null,
+          job_title: values.job_title || null,
           status: values.status,
           tags,
         });
-        toast.success(`Updated ${saved.name}`);
+        toast.success(`Updated ${leadFullName(saved)}`);
       } else {
         saved = await createLead({
-          name: values.name.trim(),
-          email: values.email.trim() || null,
-          phone: values.phone.trim(),
-          company: values.company.trim() || null,
-          industry: values.industry.trim() || null,
+          first_name: values.first_name,
+          last_name: values.last_name || null,
+          email: values.email || null,
+          phone: values.phone,
+          linkedin_url: values.linkedin_url || null,
+          company: values.company || null,
+          job_title: values.job_title || null,
           status: values.status,
           tags,
-          lead_list_id:
-            values.leadListId === NO_LIST ? null : values.leadListId,
+          lead_list_ids:
+            values.lead_list_id && values.lead_list_id !== NO_LIST
+              ? [values.lead_list_id]
+              : null,
         });
-        toast.success(`Added ${saved.name}`);
+        toast.success(`Added ${leadFullName(saved)}`);
       }
       onSaved?.(saved);
       onOpenChange(false);
     } catch (err) {
-      toast.error(formatApiError(err, "Could not save lead"));
-    } finally {
-      setSubmitting(false);
+      toast.error(formatLeadError(err, "Could not save lead"));
     }
   }
 
@@ -191,120 +213,156 @@ export default function LeadFormDialog({
               )}
             </div>
             <div>
-              <DialogTitle className="text-[15px] text-white">
+              <DialogTitle className="text-[15px] font-medium text-white">
                 {isEdit ? "Edit lead" : "Add lead"}
               </DialogTitle>
               <DialogDescription className="text-[12px] text-white/45 mt-0.5">
                 {isEdit
-                  ? "Update this lead's details."
-                  : "Manually add a new prospect to your pipeline."}
+                  ? "Update this lead's contact details."
+                  : "Add a new prospect to your pipeline."}
               </DialogDescription>
             </div>
           </div>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="px-5 py-4 space-y-3.5">
-          <Field label="Name" required error={errors.name}>
+        <form
+          onSubmit={handleSubmit(onSubmit)}
+          className="px-5 py-4 space-y-3.5 overflow-y-auto max-h-[70vh]"
+        >
+          {/* Name */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Field
+              label="First name"
+              required
+              error={errors.first_name?.message}
+            >
+              <Input
+                {...register("first_name")}
+                placeholder="Jane"
+                autoFocus
+                className={inputCls(!!errors.first_name)}
+              />
+            </Field>
+            <Field label="Last name" error={errors.last_name?.message}>
+              <Input
+                {...register("last_name")}
+                placeholder="Doe"
+                className={inputCls(!!errors.last_name)}
+              />
+            </Field>
+          </div>
+
+          {/* Contact */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Field label="Email" error={errors.email?.message}>
+              <Input
+                {...register("email")}
+                type="email"
+                placeholder="jane@acme.com"
+                className={inputCls(!!errors.email)}
+              />
+            </Field>
+            <Field label="Phone" required error={errors.phone?.message}>
+              <Input
+                {...register("phone")}
+                placeholder="+1 415 555 1212"
+                className={inputCls(!!errors.phone)}
+              />
+            </Field>
+          </div>
+
+          {/* Work */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Field label="Company" error={errors.company?.message}>
+              <Input
+                {...register("company")}
+                placeholder="Acme Inc."
+                className={inputCls(!!errors.company)}
+              />
+            </Field>
+            <Field label="Job title" error={errors.job_title?.message}>
+              <Input
+                {...register("job_title")}
+                placeholder="Head of Growth"
+                className={inputCls(!!errors.job_title)}
+              />
+            </Field>
+          </div>
+
+          {/* LinkedIn */}
+          <Field label="LinkedIn URL" error={errors.linkedin_url?.message}>
             <Input
-              value={values.name}
-              onChange={(e) => set("name", e.target.value)}
-              placeholder="Jane Doe"
-              className="h-9 bg-white/[0.03] border-white/[0.09] text-[13px]"
-              autoFocus
+              {...register("linkedin_url")}
+              placeholder="https://linkedin.com/in/janedoe"
+              className={inputCls(!!errors.linkedin_url)}
             />
           </Field>
 
+          {/* Status + list (or status only in edit mode) */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Field label="Email" error={errors.email}>
-              <Input
-                value={values.email}
-                onChange={(e) => set("email", e.target.value)}
-                placeholder="jane@acme.com"
-                className="h-9 bg-white/[0.03] border-white/[0.09] text-[13px]"
+            <Field label="Status" error={errors.status?.message}>
+              <Controller
+                control={control}
+                name="status"
+                render={({ field }) => (
+                  <Select value={field.value} onValueChange={field.onChange}>
+                    <SelectTrigger className={selectCls(!!errors.status)}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="bg-[#111114] border-white/[0.08]">
+                      {STATUS_OPTIONS.map((o) => (
+                        <SelectItem key={o.value} value={o.value}>
+                          {o.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
               />
             </Field>
-            <Field label="Phone" required error={errors.phone}>
-              <Input
-                value={values.phone}
-                onChange={(e) => set("phone", e.target.value)}
-                placeholder="+1 415 555 1212"
-                className="h-9 bg-white/[0.03] border-white/[0.09] text-[13px]"
-              />
-            </Field>
-          </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Field label="Company">
-              <Input
-                value={values.company}
-                onChange={(e) => set("company", e.target.value)}
-                placeholder="Acme Inc."
-                className="h-9 bg-white/[0.03] border-white/[0.09] text-[13px]"
-              />
-            </Field>
-            <Field label="Industry">
-              <Input
-                value={values.industry}
-                onChange={(e) => set("industry", e.target.value)}
-                placeholder="Software"
-                className="h-9 bg-white/[0.03] border-white/[0.09] text-[13px]"
-              />
-            </Field>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {isEdit ? (
-              <Field label="Status">
-                <Select
-                  value={values.status}
-                  onValueChange={(v) => set("status", v as LeadStatus)}
-                >
-                  <SelectTrigger className="w-full h-9 bg-white/[0.03] border-white/[0.09] text-[13px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="bg-[#111114] border-white/[0.08]">
-                    {STATUS_OPTIONS.map((o) => (
-                      <SelectItem key={o.value} value={o.value}>
-                        {o.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-            ) : (
+            {!isEdit && (
               <Field label="Lead list">
-                <Select
-                  value={values.leadListId}
-                  onValueChange={(v) => set("leadListId", v)}
-                >
-                  <SelectTrigger className="w-full h-9 bg-white/[0.03] border-white/[0.09] text-[13px]">
-                    <SelectValue placeholder="No list" />
-                  </SelectTrigger>
-                  <SelectContent
-                    className="bg-[#111114] border-white/[0.08]"
-                    position="popper"
-                  >
-                    <SelectItem value={NO_LIST}>No list</SelectItem>
-                    {leadLists.map((list) => (
-                      <SelectItem key={list.id} value={list.id}>
-                        {list.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Controller
+                  control={control}
+                  name="lead_list_id"
+                  render={({ field }) => (
+                    <Select
+                      value={field.value ?? NO_LIST}
+                      onValueChange={field.onChange}
+                    >
+                      <SelectTrigger className={selectCls(false)}>
+                        <SelectValue placeholder="No list" />
+                      </SelectTrigger>
+                      <SelectContent
+                        className="bg-[#111114] border-white/[0.08]"
+                        position="popper"
+                      >
+                        <SelectItem value={NO_LIST}>No list</SelectItem>
+                        {leadLists.map((list) => (
+                          <SelectItem key={list.id} value={list.id}>
+                            {list.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
               </Field>
             )}
-            <Field label="Tags" hint="Comma-separated">
-              <Input
-                value={values.tagsRaw}
-                onChange={(e) => set("tagsRaw", e.target.value)}
-                placeholder="warm, demo-requested"
-                className="h-9 bg-white/[0.03] border-white/[0.09] text-[13px]"
-              />
-            </Field>
           </div>
 
-          <div className="flex items-center justify-end gap-2 pt-2">
+          {/* Tags */}
+          <Field label="Tags" hint="Comma-separated" error={errors.tags?.message}>
+            <Input
+              {...register("tags")}
+              placeholder="enterprise, warm, demo-requested"
+              className={inputCls(!!errors.tags)}
+            />
+          </Field>
+
+          {/* Footer */}
+          <div className="flex items-center justify-end gap-2 pt-2 border-t border-white/[0.05]">
             <Button
               type="button"
               variant="ghost"
@@ -317,16 +375,39 @@ export default function LeadFormDialog({
             <Button
               type="submit"
               size="sm"
-              disabled={submitting}
-              className="bg-violet-600 hover:bg-violet-500 text-white"
+              disabled={isSubmitting}
+              className="bg-violet-600 hover:bg-violet-500 text-white min-w-[90px]"
             >
-              {submitting && <Loader2 size={13} className="animate-spin" />}
-              {isEdit ? "Save changes" : "Add lead"}
+              {isSubmitting ? (
+                <Loader2 size={13} className="animate-spin" />
+              ) : isEdit ? (
+                "Save changes"
+              ) : (
+                "Add lead"
+              )}
             </Button>
           </div>
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sub-components
+// ---------------------------------------------------------------------------
+
+function inputCls(hasError: boolean) {
+  return cn(
+    "h-9 bg-white/[0.03] border-white/[0.09] text-[13px] text-white",
+    hasError && "border-red-500/50 focus-visible:ring-red-500/20"
+  );
+}
+
+function selectCls(hasError: boolean) {
+  return cn(
+    "w-full h-9 bg-white/[0.03] border-white/[0.09] text-[13px] text-white",
+    hasError && "border-red-500/50"
   );
 }
 
@@ -344,17 +425,19 @@ function Field({
   children: React.ReactNode;
 }) {
   return (
-    <div>
-      <div className="flex items-center justify-between mb-1">
-        <Label className="text-[11px] font-medium text-white/55">
+    <div className="space-y-1">
+      <div className="flex items-center justify-between">
+        <Label className="text-[11px] font-medium text-white/55 uppercase tracking-wide">
           {label}
           {required && <span className="text-red-400 ml-0.5">*</span>}
         </Label>
-        {hint && <span className="text-[10.5px] text-white/35">{hint}</span>}
+        {hint && (
+          <span className="text-[10.5px] text-white/30">{hint}</span>
+        )}
       </div>
       {children}
       {error && (
-        <p className={cn("text-[11px] text-red-300 mt-1")}>{error}</p>
+        <p className="text-[11px] text-red-300 leading-tight">{error}</p>
       )}
     </div>
   );

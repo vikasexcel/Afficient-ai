@@ -1,56 +1,88 @@
-import { api } from "./auth";
-import { formatApiError } from "@/lib/apiError";
+import { api } from "@/services/auth";
+import type { AxiosError } from "axios";
 import type {
-  ActivityType,
-  CommitUploadPayload,
-  CommitUploadResult,
   CreateLeadInput,
+  CreateLeadListInput,
   Lead,
-  LeadActivity,
   LeadList,
+  LeadListLeadsResponse,
+  LeadListResponse,
+  MembershipResponse,
   UpdateLeadInput,
-  UploadPreview,
+  UpdateLeadListInput,
 } from "@/types/lead";
 
-export { formatApiError as formatLeadApiError };
-
-/* -------------------------------------------------------------------------- */
-/* Lead lists                                                                 */
-/* -------------------------------------------------------------------------- */
+// --------------------------------------------------------------------------
+// Lead lists
+// --------------------------------------------------------------------------
 
 export async function listLeadLists(): Promise<LeadList[]> {
-  const res = await api.get<{ lead_lists: LeadList[] }>("/lead-lists");
+  const res = await api.get<LeadListResponse>("/lead-lists");
   return res.data.lead_lists;
 }
 
-export async function createLeadList(input: {
-  name: string;
-  description?: string;
-  source?: string;
-}): Promise<LeadList> {
+export async function createLeadList(
+  input: CreateLeadListInput
+): Promise<LeadList> {
   const res = await api.post<LeadList>("/lead-lists", input);
   return res.data;
 }
 
-/* -------------------------------------------------------------------------- */
-/* Leads                                                                      */
-/* -------------------------------------------------------------------------- */
-
-export async function listLeads(params?: {
-  lead_list_id?: string;
-  search?: string;
-  limit?: number;
-  offset?: number;
-}): Promise<{ leads: Lead[]; total: number }> {
-  const res = await api.get<{ leads: Lead[]; total: number }>("/leads", {
-    params,
-  });
+export async function updateLeadList(
+  listId: string,
+  input: UpdateLeadListInput
+): Promise<LeadList> {
+  const res = await api.patch<LeadList>(`/lead-lists/${listId}`, input);
   return res.data;
 }
 
-/** Fetch a single lead by id (`GET /leads/{id}`). */
+export async function deleteLeadList(listId: string): Promise<void> {
+  await api.delete(`/lead-lists/${listId}`);
+}
+
+export async function addLeadsToList(
+  listId: string,
+  leadIds: string[]
+): Promise<MembershipResponse> {
+  const res = await api.post<MembershipResponse>(
+    `/lead-lists/${listId}/leads`,
+    { lead_ids: leadIds }
+  );
+  return res.data;
+}
+
+export async function removeLeadsFromList(
+  listId: string,
+  leadIds: string[]
+): Promise<MembershipResponse> {
+  const res = await api.delete<MembershipResponse>(
+    `/lead-lists/${listId}/leads`,
+    { data: { lead_ids: leadIds } }
+  );
+  return res.data;
+}
+
+// --------------------------------------------------------------------------
+// Leads
+// --------------------------------------------------------------------------
+
+export interface ListLeadsParams {
+  lead_list_id?: string;
+  search?: string;
+  status?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export async function listLeads(
+  params: ListLeadsParams = {}
+): Promise<LeadListLeadsResponse> {
+  const res = await api.get<LeadListLeadsResponse>("/leads", { params });
+  return res.data;
+}
+
 export async function getLead(leadId: string): Promise<Lead> {
-  const res = await api.get<Lead>(`/leads/${encodeURIComponent(leadId)}`);
+  const res = await api.get<Lead>(`/leads/${leadId}`);
   return res.data;
 }
 
@@ -63,66 +95,19 @@ export async function updateLead(
   leadId: string,
   input: UpdateLeadInput
 ): Promise<Lead> {
-  const res = await api.patch<Lead>(
-    `/leads/${encodeURIComponent(leadId)}`,
-    input
-  );
+  const res = await api.patch<Lead>(`/leads/${leadId}`, input);
   return res.data;
 }
 
 export async function deleteLead(leadId: string): Promise<void> {
-  await api.delete(`/leads/${encodeURIComponent(leadId)}`);
+  await api.delete(`/leads/${leadId}`);
 }
 
-/* -------------------------------------------------------------------------- */
-/* Lead activities                                                            */
-/* -------------------------------------------------------------------------- */
+// --------------------------------------------------------------------------
+// Error helper
+// --------------------------------------------------------------------------
 
-export async function listLeadActivities(
-  leadId: string
-): Promise<LeadActivity[]> {
-  const res = await api.get<{ activities: LeadActivity[] }>(
-    `/leads/${encodeURIComponent(leadId)}/activities`
-  );
-  return res.data.activities;
-}
-
-export async function logLeadActivity(
-  leadId: string,
-  input: { activity_type: ActivityType; notes?: string | null }
-): Promise<LeadActivity> {
-  const res = await api.post<LeadActivity>(
-    `/leads/${encodeURIComponent(leadId)}/activities`,
-    input
-  );
-  return res.data;
-}
-
-/* -------------------------------------------------------------------------- */
-/* CSV upload                                                                 */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Send the raw CSV file to the server for parse + validate + dedupe.
- *
- * The server cross-checks against the org's existing phones so the FE
- * preview shows accurate "already exists in your workspace" hints.
- */
-export async function previewUpload(file: File): Promise<UploadPreview> {
-  const form = new FormData();
-  form.append("file", file, file.name);
-  const res = await api.post<UploadPreview>("/leads/upload/preview", form, {
-    headers: { "Content-Type": "multipart/form-data" },
-  });
-  return res.data;
-}
-
-export async function commitUpload(
-  payload: CommitUploadPayload
-): Promise<CommitUploadResult> {
-  const res = await api.post<CommitUploadResult>(
-    "/leads/upload/commit",
-    payload
-  );
-  return res.data;
+export function formatLeadApiError(err: unknown, fallback: string): string {
+  const axiosErr = err as AxiosError<{ detail?: string }>;
+  return axiosErr?.response?.data?.detail ?? fallback;
 }
