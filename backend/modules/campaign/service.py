@@ -30,7 +30,7 @@ from modules.campaign.model import (
     CAMPAIGN_STATUS_SCHEDULED,
     Campaign,
 )
-from modules.campaign.repository import CampaignRepository
+from modules.campaign.repository import CampaignRepository, ExecutionRepository
 from modules.campaign.schema import (
     CampaignOut,
     CreateCampaign,
@@ -341,15 +341,32 @@ class CampaignService:
                 CAMPAIGN_STATUS_SCHEDULED,
             ):
                 campaign.status = CAMPAIGN_STATUS_ACTIVE
-                db.commit()
                 log.info(
                     "campaign.activate.status_promoted",
                     campaign_id=str(campaign.id),
                 )
+
+            # Enqueue leads if the workflow has none yet (wizard saves the
+            # workflow before activate is called, so the normal enqueue path
+            # below is never reached for wizard-created campaigns).
+            existing_count = sum(
+                ExecutionRepository.count_by_status(db, campaign.id).values()
+            )
+            enqueued = 0
+            if existing_count == 0 and campaign.lead_list_id:
+                enqueued = CampaignService._enqueue_leads(db, campaign, existing)
+                log.info(
+                    "campaign.activate.leads_enqueued_on_existing_workflow",
+                    campaign_id=str(campaign.id),
+                    enqueued=enqueued,
+                )
+
+            db.commit()
             return {
                 "workflow_id": str(existing.id),
                 "state": existing.state,
                 "already_active": True,
+                "enqueued_leads": enqueued,
             }
 
         now = datetime.now(timezone.utc)
@@ -390,7 +407,7 @@ class CampaignService:
         campaign.status = CAMPAIGN_STATUS_ACTIVE
 
         enqueued = 0
-        if campaign.playbook_id and campaign.lead_list_id:
+        if campaign.lead_list_id:
             enqueued = CampaignService._enqueue_leads(db, campaign, workflow)
 
         db.commit()
