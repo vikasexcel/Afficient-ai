@@ -284,7 +284,7 @@ class CampaignScheduler:
 
     @staticmethod
     def schedule_status(db: Session, campaign: Campaign) -> dict:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         within = is_within_business_hours(
             campaign.business_hours, campaign.timezone, now
         )
@@ -330,7 +330,7 @@ class CampaignScheduler:
     ) -> dict:
         """Advance every campaign one step. Returns a summary for logging."""
 
-        now = now or datetime.now(timezone.utc)
+        now = now or datetime.now(timezone.utc).replace(tzinfo=None)
         dispatcher = dispatcher or _default_dispatcher
 
         activated = CampaignScheduler._activate_due(db, now)
