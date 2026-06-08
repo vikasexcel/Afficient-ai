@@ -86,10 +86,11 @@ class CampaignRepository:
 
     @staticmethod
     def delete(db: Session, campaign: Campaign) -> None:
-        # The campaign's child rows (workflows + their executions) use plain
-        # FKs with no ON DELETE cascade, so deleting the campaign directly
-        # raises an IntegrityError once it has been activated. Remove the
-        # children first, deepest first, then the campaign itself.
+        # The campaign's child rows use plain FKs with no ON DELETE cascade,
+        # so deleting the campaign directly raises an IntegrityError once it
+        # has been activated. Remove children first, deepest first.
+        from modules.telephony.model import TelephonyCall
+
         workflow_ids = [
             row[0]
             for row in db.execute(
@@ -107,6 +108,12 @@ class CampaignRepository:
             db.execute(
                 delete(Workflow).where(Workflow.id.in_(workflow_ids))
             )
+        # telephony_calls.campaign_id → campaigns.id (no cascade)
+        db.execute(
+            delete(TelephonyCall).where(
+                TelephonyCall.campaign_id == campaign.id
+            )
+        )
         db.delete(campaign)
 
     # ------------------------------------------------------------------ #
