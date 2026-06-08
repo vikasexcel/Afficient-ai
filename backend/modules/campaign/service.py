@@ -369,7 +369,7 @@ class CampaignService:
                 "enqueued_leads": enqueued,
             }
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
 
         # 1) Future schedule -> hold as "scheduled", don't dial yet.
         if campaign.scheduled_at is not None and campaign.scheduled_at > now:
