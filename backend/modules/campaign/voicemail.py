@@ -135,6 +135,44 @@ def validate_audio_format(
     )
 
 
+# Magic-byte signatures for common audio formats.
+# We only need to recognise the first 12 bytes.
+_MAGIC_BYTES: list[tuple[bytes, str]] = [
+    (b"RIFF", "wav"),           # WAV / WAV-like RIFF container
+    (b"OggS", "ogg"),           # OGG container
+    (b"\xff\xfb", "mp3"),       # MP3 MPEG-1 Layer 3
+    (b"\xff\xf3", "mp3"),       # MP3 MPEG-2 Layer 3
+    (b"\xff\xf2", "mp3"),       # MP3 MPEG-2 Layer 3 (variation)
+    (b"\xff\xe3", "mp3"),       # MP3 MPEG-2.5
+    (b"ID3", "mp3"),            # MP3 with ID3 tag
+    (b"\xff\xf0", "aac"),       # ADTS AAC
+    (b"\xff\xf1", "aac"),       # ADTS AAC
+    (b"fLaC", "flac"),          # FLAC
+]
+
+
+def validate_audio_magic_bytes(data: bytes) -> str | None:
+    """Check the first 12 bytes of ``data`` against known audio signatures.
+
+    Returns the matched format string, or ``None`` when no signature matches
+    (the caller can choose whether to reject or allow-through unrecognised
+    files — we raise :class:`VoicemailValidationError` in the upload path).
+
+    This check is a defence-in-depth measure against clients that spoof the
+    ``Content-Type`` header or rename a non-audio file with an audio extension.
+    It does NOT replace the extension / content-type check — both run.
+    """
+
+    head = data[:12]
+    for signature, fmt in _MAGIC_BYTES:
+        if head.startswith(signature):
+            return fmt
+    # MP4/M4A/AAC inside ISO Base Media File Format: "ftyp" at offset 4.
+    if len(head) >= 8 and head[4:8] == b"ftyp":
+        return "aac"
+    return None
+
+
 def validate_file_size(size_bytes: int) -> None:
     """Reject empty or oversized uploads."""
 

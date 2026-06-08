@@ -123,9 +123,20 @@ class UpdateCampaign(BaseModel):
     voicemail_config: CampaignVoicemailConfig | None = None
     status: str | None = None
 
+    @field_validator("status")
+    @classmethod
+    def _status(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        if v not in ALL_CAMPAIGN_STATUSES:
+            raise ValueError(
+                f"status must be one of {sorted(ALL_CAMPAIGN_STATUSES)}"
+            )
+        return v
+
 
 class ActivateCampaign(BaseModel):
-    campaign_id: str
+    campaign_id: uuid.UUID
 
 
 # ---------------------------------------------------------------------------

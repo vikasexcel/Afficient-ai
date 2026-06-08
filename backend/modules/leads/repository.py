@@ -104,6 +104,7 @@ class LeadRepository:
             like = f"%{term.lower()}%"
             base = base.where(
                 or_(
+                    func.lower(func.coalesce(Lead.display_name, "")).like(like),
                     func.lower(Lead.first_name).like(like),
                     func.lower(func.coalesce(Lead.last_name, "")).like(like),
                     func.lower(func.coalesce(Lead.email, "")).like(like),

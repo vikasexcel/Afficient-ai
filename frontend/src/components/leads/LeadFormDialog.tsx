@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { createLead, formatLeadError, listLeadLists, updateLead } from "@/services/leads";
-import { leadFullName } from "@/types/lead";
+import { leadDisplayName } from "@/types/lead";
 import type { Lead, LeadList, LeadStatus } from "@/types/lead";
 
 // ---------------------------------------------------------------------------
@@ -34,6 +34,12 @@ import type { Lead, LeadList, LeadStatus } from "@/types/lead";
 const PHONE_RE = /^[+\d\s().-]+$/;
 
 const leadSchema = z.object({
+  display_name: z
+    .string()
+    .trim()
+    .max(255, "Display name must be 255 characters or fewer")
+    .optional()
+    .or(z.literal("")),
   first_name: z.string().trim().min(1, "First name is required").max(120),
   last_name: z.string().trim().max(120).optional().or(z.literal("")),
   email: z
@@ -92,6 +98,7 @@ const NO_LIST = "__none__";
 
 function toForm(lead: Lead | null): FormValues {
   return {
+    display_name: lead?.display_name ?? "",
     first_name: lead?.first_name ?? "",
     last_name: lead?.last_name ?? "",
     email: lead?.email ?? "",
@@ -161,6 +168,7 @@ export default function LeadFormDialog({
       let saved: Lead;
       if (isEdit && lead) {
         saved = await updateLead(lead.id, {
+          display_name: values.display_name || null,
           first_name: values.first_name,
           last_name: values.last_name || null,
           email: values.email || null,
@@ -171,9 +179,10 @@ export default function LeadFormDialog({
           status: values.status,
           tags,
         });
-        toast.success(`Updated ${leadFullName(saved)}`);
+        toast.success(`Updated ${leadDisplayName(saved)}`);
       } else {
         saved = await createLead({
+          display_name: values.display_name || null,
           first_name: values.first_name,
           last_name: values.last_name || null,
           email: values.email || null,
@@ -188,7 +197,7 @@ export default function LeadFormDialog({
               ? [values.lead_list_id]
               : null,
         });
-        toast.success(`Added ${leadFullName(saved)}`);
+        toast.success(`Added ${leadDisplayName(saved)}`);
       }
       onSaved?.(saved);
       onOpenChange(false);
@@ -229,6 +238,19 @@ export default function LeadFormDialog({
           onSubmit={handleSubmit(onSubmit)}
           className="px-5 py-4 space-y-3.5 overflow-y-auto max-h-[70vh]"
         >
+          {/* Display name */}
+          <Field
+            label="Lead name"
+            hint="How this lead appears in the app"
+            error={errors.display_name?.message}
+          >
+            <Input
+              {...register("display_name")}
+              placeholder="e.g. Product Lead 1"
+              className={inputCls(!!errors.display_name)}
+            />
+          </Field>
+
           {/* Name */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Field

@@ -12,7 +12,7 @@ import hmac
 import uuid
 from datetime import timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.security import HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -298,7 +298,7 @@ async def initiate_call(
 
 @router.get("/calls", response_model=CallListResponse)
 async def list_calls(
-    limit: int = 50,
+    limit: int = Query(default=50, ge=1, le=500),
     status: str | None = None,
     answered_by: str | None = None,
     tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),

@@ -40,6 +40,19 @@ _AUTH_PATHS = (
     "/api/v1/auth/refresh",
 )
 
+# Expensive AI inference endpoints — dedicated lower budget to prevent
+# cost amplification.  Matched on exact path + POST method.
+_AI_INFERENCE_PATHS = (
+    "/api/v1/ai/generate",
+    "/api/v1/ai/converse",
+)
+
+# Real telephony origination — real Twilio cost + call volume impact.
+_TELEPHONY_ORIGINATE_PATH = "/api/v1/telephony/calls"
+
+# Campaign activation — triggers lead enqueueing, can be slow.
+_CAMPAIGN_ACTIVATE_PATH = "/api/v1/campaigns/activate"
+
 
 def _is_exempt(path: str) -> bool:
     """Cheap prefix scan against the configured exemption list.
@@ -104,10 +117,24 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         # Pick the right bucket. Auth endpoints have a much smaller
         # budget so a single IP cannot brute-force credentials.
+        # Expensive AI inference and telephony endpoints have their own
+        # narrower budgets to prevent runaway cost amplification.
         if path in _AUTH_PATHS:
             bucket = "auth"
             max_requests = settings.RATE_LIMIT_AUTH_REQUESTS
             window = settings.RATE_LIMIT_AUTH_WINDOW_SECONDS
+        elif method == "POST" and path in _AI_INFERENCE_PATHS:
+            bucket = "ai"
+            max_requests = settings.RATE_LIMIT_AI_REQUESTS
+            window = settings.RATE_LIMIT_AI_WINDOW_SECONDS
+        elif method == "POST" and path == _TELEPHONY_ORIGINATE_PATH:
+            bucket = "telephony"
+            max_requests = settings.RATE_LIMIT_TELEPHONY_REQUESTS
+            window = settings.RATE_LIMIT_TELEPHONY_WINDOW_SECONDS
+        elif method == "POST" and path == _CAMPAIGN_ACTIVATE_PATH:
+            bucket = "campaign_activate"
+            max_requests = settings.RATE_LIMIT_CAMPAIGN_ACTIVATE_REQUESTS
+            window = settings.RATE_LIMIT_CAMPAIGN_ACTIVATE_WINDOW_SECONDS
         else:
             bucket = "api"
             max_requests = settings.RATE_LIMIT_REQUESTS

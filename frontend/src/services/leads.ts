@@ -111,6 +111,29 @@ export async function deleteLead(leadId: string): Promise<void> {
 }
 
 // --------------------------------------------------------------------------
+// CSV import
+// --------------------------------------------------------------------------
+
+export interface ImportLeadsResult {
+  imported: number;
+  skipped: number;
+  errors: { row: number; errors: string[] }[];
+}
+
+export async function importLeadsCSV(
+  file: File,
+  leadListId?: string | null
+): Promise<ImportLeadsResult> {
+  const form = new FormData();
+  form.append("file", file);
+  if (leadListId) form.append("lead_list_id", leadListId);
+  const res = await api.post<ImportLeadsResult>("/leads/import", form, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+  return res.data;
+}
+
+// --------------------------------------------------------------------------
 // Error helper
 // --------------------------------------------------------------------------
 

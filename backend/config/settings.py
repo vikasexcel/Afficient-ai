@@ -284,6 +284,19 @@ class Settings(BaseSettings):
     # an attacker can't brute force from one IP.
     RATE_LIMIT_AUTH_REQUESTS: int = 10
     RATE_LIMIT_AUTH_WINDOW_SECONDS: int = 60
+    # Dedicated budget for expensive AI inference calls (POST /ai/generate,
+    # POST /ai/converse). Lower than the general API budget to prevent
+    # runaway cost amplification.
+    RATE_LIMIT_AI_REQUESTS: int = 30
+    RATE_LIMIT_AI_WINDOW_SECONDS: int = 60
+    # Dedicated budget for outbound telephony calls (POST /telephony/calls).
+    # Prevents a single AGENT from initiating hundreds of real Twilio calls/min.
+    RATE_LIMIT_TELEPHONY_REQUESTS: int = 60
+    RATE_LIMIT_TELEPHONY_WINDOW_SECONDS: int = 60
+    # Dedicated budget for campaign activation (POST /campaigns/activate).
+    # Prevents mass re-activation in tight loops.
+    RATE_LIMIT_CAMPAIGN_ACTIVATE_REQUESTS: int = 20
+    RATE_LIMIT_CAMPAIGN_ACTIVATE_WINDOW_SECONDS: int = 60
     # Set to False in tests / load-gen environments to disable the
     # middleware entirely.
     RATE_LIMIT_ENABLED: bool = True

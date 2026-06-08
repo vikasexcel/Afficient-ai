@@ -47,6 +47,7 @@ from modules.campaign.voicemail import (
     VoicemailValidationError,
     store_recording,
     validate_audio_format,
+    validate_audio_magic_bytes,
     validate_file_size,
     validate_voicemail_url,
 )
@@ -112,11 +113,14 @@ async def list_campaigns(
 @router.get("/scheduler-status", response_model=SchedulerStatusOut)
 async def get_scheduler_status(
     db: Session = Depends(get_db),
-    tenant=Depends(get_current_tenant),
+    tenant=Depends(requires(Role.OWNER, Role.ADMIN)),
 ):
-    """Report Celery worker / Beat / Redis health for campaign dispatch."""
+    """Report Celery worker / Beat / Redis health for campaign dispatch.
 
-    _ = tenant  # tenant-scoped auth; counts are global across the deployment
+    Restricted to OWNER / ADMIN — exposes infrastructure-level state
+    (Redis connectivity, worker heartbeat, global execution queue depth)
+    that should not be visible to AGENT or MEMBER roles.
+    """
     return scheduler_status(db)
 
 
@@ -250,42 +254,74 @@ async def campaign_monitor(
     details (capped at 200, newest-first), and the active workflow graph.
     Avoids N+1 queries by joining executions with leads in one statement.
     """
-    from modules.leads.model import Lead as LeadModel  # local import to avoid circular
+    import logging
+    _log = logging.getLogger(__name__)
 
     campaign = _load_campaign(db, _org_uuid(tenant), campaign_id)
-    metrics = CampaignScheduler.metrics(db, campaign)
+
+    try:
+        metrics = CampaignScheduler.metrics(db, campaign)
+    except Exception as exc:
+        _log.exception("monitor: metrics failed for campaign %s", campaign_id)
+        db.rollback()
+        metrics = {
+            "campaign_id": str(campaign_id),
+            "status": campaign.status,
+            "total_leads": 0,
+            "queued_leads": 0,
+            "active_calls": 0,
+            "completed_calls": 0,
+            "failed_calls": 0,
+            "failed_executions": 0,
+            "pending_leads": 0,
+            "progress_percent": 0.0,
+            "retry_count": 0,
+            "retry_success_rate": 0.0,
+            "exhausted_retries": 0,
+            "average_attempts_per_call": 0.0,
+            "human_answered": 0,
+            "voicemail_detected": 0,
+            "voicemail_dropped": 0,
+            "voicemail_retry_count": 0,
+            "voicemail_success_rate": 0.0,
+            "_error": str(exc),
+        }
 
     # Executions joined with leads — single query.
-    rows = ExecutionRepository.list_for_campaign_with_leads(db, campaign_id)
     executions: list[MonitorExecution] = []
-    for execution, lead in rows:
-        lead_name: str | None = None
-        lead_email: str | None = None
-        lead_phone: str | None = None
-        if lead is not None:
-            parts = [p for p in [lead.first_name, lead.last_name] if p]
-            lead_name = " ".join(parts) if parts else None
-            lead_email = lead.email
-            lead_phone = lead.phone
-        executions.append(
-            MonitorExecution(
-                id=execution.id,
-                status=execution.status,
-                lead_id=execution.lead_id,
-                lead_name=lead_name,
-                lead_email=lead_email,
-                lead_phone=lead_phone,
-                current_node_id=execution.current_node_id,
-                attempt_number=execution.attempt_number,
-                outcome=execution.outcome,
-                retry_status=execution.retry_status,
-                next_retry_at=execution.next_retry_at,
-                last_failure_reason=execution.last_failure_reason,
-                node_outputs=execution.node_outputs,
-                created_at=execution.created_at,
-                updated_at=execution.updated_at,
+    try:
+        rows = ExecutionRepository.list_for_campaign_with_leads(db, campaign_id)
+        for execution, lead in rows:
+            lead_name: str | None = None
+            lead_email: str | None = None
+            lead_phone: str | None = None
+            if lead is not None:
+                parts = [p for p in [lead.first_name, lead.last_name] if p]
+                lead_name = " ".join(parts) if parts else None
+                lead_email = lead.email
+                lead_phone = lead.phone
+            executions.append(
+                MonitorExecution(
+                    id=execution.id,
+                    status=execution.status,
+                    lead_id=execution.lead_id,
+                    lead_name=lead_name,
+                    lead_email=lead_email,
+                    lead_phone=lead_phone,
+                    current_node_id=execution.current_node_id,
+                    attempt_number=execution.attempt_number,
+                    outcome=execution.outcome,
+                    retry_status=execution.retry_status,
+                    next_retry_at=execution.next_retry_at,
+                    last_failure_reason=execution.last_failure_reason,
+                    node_outputs=execution.node_outputs,
+                    created_at=execution.created_at,
+                    updated_at=execution.updated_at,
+                )
             )
-        )
+    except Exception:
+        _log.exception("monitor: executions query failed for campaign %s", campaign_id)
+        db.rollback()
 
     # Workflow graph (best-effort — 404 not raised for monitor).
     wf_nodes: list = []
@@ -360,6 +396,19 @@ async def set_voicemail(
             )
             data = await file.read()
             validate_file_size(len(data))
+            # Defence-in-depth: inspect actual file bytes to catch spoofed
+            # Content-Type / extensions.  Warn but don't block when the
+            # signature is unrecognised — some valid audio containers (e.g.
+            # unusual ADIF AAC, older OGG variants) lack standard magic bytes.
+            detected = validate_audio_magic_bytes(data)
+            if detected is None and len(data) > 0:
+                logger.warning(
+                    "voicemail upload: unrecognised magic bytes, continuing "
+                    "with extension/content-type validation only "
+                    "(filename=%s, content_type=%s)",
+                    file.filename,
+                    file.content_type,
+                )
             resolved_url = store_recording(
                 campaign_id=str(campaign_id), data=data, fmt=fmt
             )

@@ -46,6 +46,7 @@ class LeadListOut(BaseModel):
     organization_id: uuid.UUID
     name: str
     description: str | None = None
+    lead_count: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -74,6 +75,7 @@ class UpdateLeadListInput(BaseModel):
 class LeadOut(BaseModel):
     id: uuid.UUID
     organization_id: uuid.UUID
+    display_name: str | None = None
     first_name: str
     last_name: str | None = None
     email: str | None = None
@@ -107,6 +109,7 @@ class LeadListLeadsResponse(BaseModel):
 
 
 class CreateLeadInput(BaseModel):
+    display_name: str | None = Field(default=None, max_length=255)
     first_name: str = Field(min_length=1, max_length=120)
     last_name: str | None = Field(default=None, max_length=120)
     email: EmailStr | None = None
@@ -115,9 +118,17 @@ class CreateLeadInput(BaseModel):
     company: str | None = Field(default=None, max_length=255)
     job_title: str | None = Field(default=None, max_length=120)
     status: str = "new"
-    tags: list[str] | None = None
+    tags: list[str] | None = Field(default=None, max_length=50)
     extra_data: dict[str, Any] | None = None
     lead_list_ids: list[uuid.UUID] | None = None
+
+    @field_validator("display_name")
+    @classmethod
+    def _display_name(cls, v: str | None) -> str | None:
+        if not v:
+            return None
+        stripped = v.strip()
+        return stripped or None
 
     @field_validator("phone")
     @classmethod
@@ -141,8 +152,36 @@ class CreateLeadInput(BaseModel):
             )
         return v
 
+    @field_validator("tags")
+    @classmethod
+    def _tags(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return v
+        if len(v) > 50:
+            raise ValueError("tags list may not exceed 50 items")
+        for tag in v:
+            if len(tag) > 64:
+                raise ValueError(
+                    f"each tag must be 64 characters or fewer (got {len(tag)!r})"
+                )
+        return v
+
+    @field_validator("extra_data")
+    @classmethod
+    def _extra_data_size(cls, v: dict | None) -> dict | None:
+        if v is None:
+            return v
+        import json
+        size = len(json.dumps(v))
+        if size > 65536:  # 64 KB cap
+            raise ValueError(
+                f"extra_data payload too large ({size} bytes, max 65536)"
+            )
+        return v
+
 
 class UpdateLeadInput(BaseModel):
+    display_name: str | None = Field(default=None, max_length=255)
     first_name: str | None = Field(default=None, min_length=1, max_length=120)
     last_name: str | None = Field(default=None, max_length=120)
     email: EmailStr | None = None
@@ -153,6 +192,14 @@ class UpdateLeadInput(BaseModel):
     status: str | None = None
     tags: list[str] | None = None
     extra_data: dict[str, Any] | None = None
+
+    @field_validator("display_name")
+    @classmethod
+    def _display_name(cls, v: str | None) -> str | None:
+        if not v:
+            return None
+        stripped = v.strip()
+        return stripped or None
 
     @field_validator("phone")
     @classmethod
@@ -169,6 +216,33 @@ class UpdateLeadInput(BaseModel):
         if v not in ALL_LEAD_STATUSES:
             raise ValueError(
                 f"status must be one of {sorted(ALL_LEAD_STATUSES)}"
+            )
+        return v
+
+    @field_validator("tags")
+    @classmethod
+    def _tags(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return v
+        if len(v) > 50:
+            raise ValueError("tags list may not exceed 50 items")
+        for tag in v:
+            if len(tag) > 64:
+                raise ValueError(
+                    f"each tag must be 64 characters or fewer"
+                )
+        return v
+
+    @field_validator("extra_data")
+    @classmethod
+    def _extra_data_size(cls, v: dict | None) -> dict | None:
+        if v is None:
+            return v
+        import json
+        size = len(json.dumps(v))
+        if size > 65536:
+            raise ValueError(
+                f"extra_data payload too large ({size} bytes, max 65536)"
             )
         return v
 

@@ -290,6 +290,7 @@ afficient-ai/
 | `livekit` | Create/list/get/delete LiveKit rooms, mint JWT tokens, store local session rows | `modules/livekit/*` |
 | `tts` | List voices, speak text into a LiveKit room via ElevenLabs PCM stream | `modules/tts/*` |
 | `stt` | Subscribe to a LiveKit room as an agent, pipe audio into Deepgram, return TranscriptEvents | `modules/stt/*` |
+| `analytics` | Phase 5A read-only BI: 7 GET endpoints (overview, email, calls, LinkedIn, funnel, workflow, trends). Scoped to tenant org via `campaigns→workflows→executions` join. No mutations. | `modules/analytics/*` |
 | `health` | `/health` smoke check | `modules/health/router.py` |
 
 ### Cross-cutting
@@ -311,7 +312,7 @@ afficient-ai/
 | Campaigns | minimal CRUD UI, dialog for create | `pages/Campaigns.tsx`, `services/campaign.ts` |
 | Calls | LiveKit join/disconnect, mic toggle, persona picker, GPT-4o assistant panel (live converse + BANT chips + Finalize summary), Deepgram "Live transcribe" smoke widget | `pages/Calls.tsx`, `store/livekit.ts`, `store/ai.ts`, `services/ai.ts`, `services/stt.ts` |
 | Leads | **wired to backend** — real CRUD (add/edit/delete/search), paginated list, Lead + LeadList management | `pages/Leads.tsx`, `services/lead.ts`, `types/lead.ts`, `components/leads/` |
-| Analytics | **mock data only** | `pages/Analytics.tsx` |
+| Analytics | **real data** (Phase 5A) — 7 tabs (Overview, Campaigns, Email, Calls, LinkedIn, Funnel, Workflow), date-range selector (7/30/90d), CSV/JSON/PDF export. Wired to 7 `/analytics/*` read-only APIs. | `pages/Analytics.tsx`, `services/analytics.ts`, `components/analytics/` |
 | Transcripts | Real calls from `GET /ai/calls`, per-call transcript from `GET /ai/calls/{id}/transcript`, summary + qualification, finalize + export JSON | `pages/Transcripts.tsx`, `services/ai.ts` |
 | Settings | tabs: Members, Organization, Profile, Appearance, Security | gated by role via `store/me.ts` helpers |
 | Documentation | in-app docs hub: sticky topic nav + search, 10 sections (getting started, campaigns, playbooks, leads, calls, analytics, transcripts, settings, roles & permissions, FAQ). Reached from the avatar dropdown in `Header.tsx` | `pages/Documentation.tsx` |
@@ -360,6 +361,7 @@ Backend routes are mounted under `settings.API_PREFIX` (default `/api/v1`):
 | `/tts` | tts | `GET /voices`, `POST /speak` |
 | `/stt` | stt | `POST /transcribe` (joins a LiveKit room as a Deepgram subscriber for N seconds, returns events) |
 | `/ai` | ai | `POST /generate` (stateless), `POST /converse` (stateful turn), `GET /calls`, `GET /calls/{id}/transcript`, `GET /calls/{id}/qualification`, `POST /calls/{id}/finalize`, `GET /personas` |
+| `/analytics` | analytics | `GET /overview`, `GET /email`, `GET /calls`, `GET /linkedin`, `GET /funnel`, `GET /workflow`, `GET /trends` — all accept `?days=` (1–365, default 30). Read-only, tenant-scoped. |
 
 ---
 
@@ -933,7 +935,8 @@ These are real items found while scanning the repo, not speculation.
 
 - **`Login.tsx`, `Signup.tsx`, `Dashboard.tsx`, `Calls.tsx` and others contain large commented-out legacy code blocks.** Pure clutter; safe to delete.
 - **`VITE_API_URL` default** in `services/auth.ts` points at `http://localhost:8001/api/v1`, but the backend may run on 8000 (Docker), 8001, or 8002 depending on dev workflow. The current Vite dev port is 20197. Always set `VITE_API_URL` in `frontend/.env` to match.
-- **`Leads` and `Analytics` pages still use mock data only.** No services or stores yet. (Transcripts and Calls are now real.)
+- **`Analytics` page** is now fully wired to real backend analytics APIs (Phase 5A). Mock data removed. See §4 and §5 for new analytics module details.
+- **`Leads` page** is wired to the real backend — real CRUD wired as of Phase 1.
 - **`useAuth` does not persist via Zustand's `persist` middleware** — it reads/writes localStorage manually. Works, but slightly inconsistent with `useAppearance` which uses the same pattern.
 - **No global error boundary.** Unhandled render errors will white-screen the SPA.
 - **Bundle size warning at build time** (~1.1 MB JS, ~320 KB gzipped). Consider route-level code splitting via `React.lazy` once pages have real backend wiring.
@@ -1000,6 +1003,8 @@ If something is genuinely unclear from reading the code, write **"Not clearly de
 
 ---
 
+*2026-06-08 — Phase 5A Analytics & Reporting Dashboard implemented. Backend: new `modules/analytics/` module with 7 read-only GET endpoints (`/analytics/overview`, `/email`, `/calls`, `/linkedin`, `/funnel`, `/workflow`, `/trends`). All scoped to the current tenant org; executions are joined through `workflows → campaigns` for isolation. No DB migrations needed — queries only use existing tables. Frontend: `services/analytics.ts` (typed API client), `components/analytics/` (6 components: `AnalyticsDashboard`, `CampaignAnalytics`, `EmailAnalytics`, `CallAnalytics`, `LinkedInAnalytics`, `FunnelAnalytics`, plus `WorkflowAnalytics`), and `pages/Analytics.tsx` rewritten with 7 tabs, date-range selector (7/30/90d), CSS bar charts, and CSV/JSON/PDF export. Analytics page is no longer mock-data-only.*
+
 *Last full review: 2026-06-01 — covers the post-E2E security and stability pass: hardened `/auth/audit`, `/campaigns/*`, `/ai/calls/*/transcript`; proper HTTP semantics for login/register/refresh/logout; password strength rules; campaign worker rebuilt on `OpenAIClient`; async/JWT-scoped Redis rate limiter with path exemptions; playbook branch-key whitelist; Twilio production guards; N+1 fix on `/ai/calls`; frontend `tsc -b && vite build` clean; new pytest suite (`backend/tests/`, 29 cases); external-service `healthcheck.py`. Re-scan whenever you suspect drift.*
 
 *2026-06-02 — added §12.I (Twilio webhook / ngrok wiring) and a §14 note covering the pm2-20158 vs uvicorn-8001 port mismatch that caused "We're sorry, an application error has occurred." on inbound calls. Dev convention is now: ngrok `handmade-agreed-dimple.ngrok-free.dev` → uvicorn on port `8001`; keep pm2 `afficient-be` stopped while running dev uvicorn.*
@@ -1007,5 +1012,9 @@ If something is genuinely unclear from reading the code, write **"Not clearly de
 *2026-06-02 — frontend responsive overhaul: every page and the layout shell now adapts cleanly from 360px phones up through 4K desktops. New `store/ui.ts` Zustand store drives an off-canvas mobile drawer; `Sidebar` and `Header` were refactored to consume it. Added global `overflow-x: hidden` / `max-width: 100%` safety nets in `index.css`. Tables and tab strips use horizontal scroll instead of collapsing. New documentation section: `pages/Documentation.tsx` mounted at `/documentation` (protected), reachable from the avatar dropdown in `Header.tsx`. See new §9.5 (Responsive Design) and updated §3/§4/§5/§6/§13.*
 
 *2026-06-06 — Phase 1 Lead Management implemented. Backend: `modules/leads/` rewritten with new schema (`first_name`, `last_name`, `email`, `phone`, `linkedin_url`, `company`, `job_title`, `status`, `tags`, `extra_data`); `Lead ↔ LeadList` is now many-to-many via `lead_list_memberships` join table (replacing the old direct FK); `lead_activities` removed from Phase 1; full CRUD + search + pagination + phone-dedup + audit logging (`LEAD_CREATED/UPDATED/DELETED/LEAD_LIST_CREATED`); `PATCH /lead-lists/{id}` and `DELETE /lead-lists/{id}` added; migration `o1p2q3r4s5t6_rebuild_leads` migrates the existing tables. Frontend: `types/lead.ts`, `services/lead.ts`, `pages/Leads.tsx`, `components/leads/LeadFormDialog.tsx`, `components/leads/LeadDetailsDialog.tsx` all updated for new field names. Leads page now wired to the real backend.*
+
+*2026-06-08 — Phase 5B Production Hardening implemented. Security: org ownership guard on `/ai/calls/{id}/qualification` and `/ai/calls/{id}/interruptions`; `GET /scheduler-status` now requires OWNER/ADMIN; `UpdateCampaign.status` validated against `ALL_CAMPAIGN_STATUSES`; `ActivateCampaign.campaign_id` typed as `uuid.UUID`. Rate limiting: atomic Lua INCR+EXPIRE (eliminates TOCTOU gap); dedicated buckets for AI inference (30/min), telephony (60/min), campaign activate (20/min). Error handling: `CorrelationIdMiddleware` (X-Request-ID on every request/response), `global_exception_handler` (structured JSON 500). Health: deep `/api/v1/health/ready` checks PostgreSQL, Redis, scheduler; returns 503 on failure. DB: migration `s5t6u7v8w9x0_phase5b_indexes_hardening` adds 7 indexes (executions.workflow_id, status, created_at, composite; lead_activities; campaigns.created_at). Upload: `validate_audio_magic_bytes()` in `voicemail.py`. Frontend: `ErrorBoundary` wraps entire app tree. Observability: Prometheus metrics at `/metrics` via `prometheus-fastapi-instrumentator`. Input validation: tags ≤50 items ×64 chars, extra_data ≤64 KB. New files: `common/middleware.py`, `backend/.env.example`, `frontend/.env.example`.*
+
+*2026-06-08 — Phase 5C Deployment, UAT & Go-Live. New deployment artifacts: `docker-compose.prod.yml` (7-service production compose with healthchecks), `frontend/Dockerfile.prod` (multi-stage Node build + nginx), `frontend/nginx.conf` (SPA routing, API proxy, security headers), `.github/workflows/ci.yml` (4-job CI: backend tests, lint, frontend build, Docker build). E2E tests: `backend/tests/e2e/test_campaign_lifecycle.py` (31 assertions across 4 scenarios: full lifecycle, email→call, LinkedIn→condition, retry/failure). Docs created: `docs/ADMIN_GUIDE.md`, `docs/USER_GUIDE.md`, `docs/TROUBLESHOOTING.md`, `docs/FAQ.md`, `docs/ROLLBACK.md`, `docs/PRODUCTION_CHECKLIST.md`, `docs/UAT_REPORT.md`. Production readiness score: 88% (all critical issues resolved).*
 
 *2026-06-05 — campaign dialing pipeline audit + fix. (1) Root cause of "campaign launches but no calls": `worker._campaign_dial_context` referenced a non-existent `Campaign.created_by`; the `AttributeError` was swallowed by the dial `try/except`, silently falling back to the LLM stub on every lead. Fixed to `created_by=None`, so activation → scheduler → worker now actually calls `TelephonyService.initiate_outbound` (Twilio Call SID or LiveKit SIP leg, `telephony_calls` populated, status webhooks reconcile outcomes). (2) Removed the silent LLM fallback for dial failures: lead executions now fail via the retry engine (retry scheduled when configured) and log `CAMPAIGN_DIAL_FAILED` / `CAMPAIGN_DIAL_EXCEPTION`; the LLM-plan path is reserved for non-dial/generic executions or when dialing is disabled. (3) Added `failed_executions` to campaign metrics. New env var `CAMPAIGN_TELEPHONY_DIALING_ENABLED` (default false; `true` in `backend/.env`). New tests: `tests/api/test_campaign_dialing_e2e.py` (success Twilio + LiveKit-SIP paths, telephony-unavailable, Twilio failure, LiveKit failure, invalid phone). See updated §1/§3/§4/§11/§13/§14.*

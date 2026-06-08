@@ -8,11 +8,13 @@ import {
 import {
   ChevronLeft,
   ChevronRight,
+  Layers,
   Loader2,
   MoreHorizontal,
   Phone,
   Plus,
   Search,
+  Upload,
   Users,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -21,6 +23,8 @@ import AppLayout from "@/components/layout/AppLayout";
 import LeadFormDialog from "@/components/leads/LeadFormDialog";
 import LeadDeleteDialog from "@/components/leads/LeadDeleteDialog";
 import LeadDrawer from "@/components/leads/LeadDrawer";
+import LeadImportDialog from "@/components/leads/LeadImportDialog";
+import LeadListsDialog from "@/components/leads/LeadListsDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -46,7 +50,7 @@ import {
   listLeads,
 } from "@/services/leads";
 import { initiateCall } from "@/services/telephony";
-import { leadFullName } from "@/types/lead";
+import { leadDisplayName, leadFullName } from "@/types/lead";
 import type { Lead, LeadList, LeadStatus } from "@/types/lead";
 
 // ---------------------------------------------------------------------------
@@ -122,6 +126,9 @@ export default function Leads() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [drawerLead, setDrawerLead] = useState<Lead | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importPreselectedListId, setImportPreselectedListId] = useState<string | null>(null);
+  const [leadListsOpen, setLeadListsOpen] = useState(false);
 
   // Debounce search input (300 ms)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -203,7 +210,7 @@ export default function Leads() {
   }
 
   async function handleCall(lead: Lead) {
-    const name = leadFullName(lead);
+    const name = leadDisplayName(lead);
     const toastId = toast.loading(`Calling ${name}…`);
     try {
       await initiateCall({
@@ -253,14 +260,34 @@ export default function Leads() {
                 : "Manage prospects and pipeline activity."}
             </p>
           </div>
-          <Button
-            size="sm"
-            className="bg-violet-600 hover:bg-violet-500 text-white self-start sm:self-auto"
-            onClick={openCreate}
-          >
-            <Plus size={13} />
-            Add lead
-          </Button>
+          <div className="flex items-center gap-2 self-start sm:self-auto">
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-white/[0.1] bg-white/[0.02] text-white/70 hover:text-white hover:bg-white/[0.05]"
+              onClick={() => setLeadListsOpen(true)}
+            >
+              <Layers size={13} />
+              Lead Lists
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-white/[0.1] bg-white/[0.02] text-white/70 hover:text-white hover:bg-white/[0.05]"
+              onClick={() => { setImportPreselectedListId(null); setImportOpen(true); }}
+            >
+              <Upload size={13} />
+              Import CSV
+            </Button>
+            <Button
+              size="sm"
+              className="bg-violet-600 hover:bg-violet-500 text-white"
+              onClick={openCreate}
+            >
+              <Plus size={13} />
+              Add lead
+            </Button>
+          </div>
         </div>
 
         {/* Stat cards */}
@@ -379,7 +406,6 @@ export default function Leads() {
 
                 <TableBody>
                   {leads.map((lead) => {
-                    const fullName = leadFullName(lead);
                     const status = STATUS_CONFIG[lead.status];
                     return (
                       <TableRow
@@ -387,21 +413,34 @@ export default function Leads() {
                         className="border-white/[0.04] hover:bg-white/[0.02] cursor-pointer group"
                         onClick={() => openDrawer(lead)}
                       >
-                        {/* Name + company */}
+                        {/* Name — display name primary, contact name / company secondary */}
                         <TableCell className="py-3">
-                          <div className="flex items-center gap-2.5">
-                            <Avatar name={fullName} />
-                            <div className="min-w-0">
-                              <p className="text-[13px] text-white truncate leading-tight">
-                                {fullName}
-                              </p>
-                              {lead.company && (
-                                <p className="text-[11px] text-white/40 truncate mt-0.5">
-                                  {lead.company}
-                                </p>
-                              )}
-                            </div>
-                          </div>
+                          {(() => {
+                            const displayName = leadDisplayName(lead);
+                            const contactName = leadFullName(lead);
+                            const hasCustomDisplay =
+                              lead.display_name?.trim() &&
+                              lead.display_name.trim() !== contactName;
+                            return (
+                              <div className="flex items-center gap-2.5">
+                                <Avatar name={displayName} />
+                                <div className="min-w-0">
+                                  <p className="text-[13px] text-white truncate leading-tight">
+                                    {displayName}
+                                  </p>
+                                  {hasCustomDisplay ? (
+                                    <p className="text-[11px] text-white/40 truncate mt-0.5">
+                                      {contactName}
+                                    </p>
+                                  ) : lead.company ? (
+                                    <p className="text-[11px] text-white/40 truncate mt-0.5">
+                                      {lead.company}
+                                    </p>
+                                  ) : null}
+                                </div>
+                              </div>
+                            );
+                          })()}
                         </TableCell>
 
                         {/* Contact */}
@@ -549,6 +588,31 @@ export default function Leads() {
           )}
         </div>
       </div>
+
+      {/* Import CSV dialog */}
+      <LeadImportDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        leadLists={leadLists}
+        preselectedListId={importPreselectedListId}
+        onImported={() => void fetchLeads()}
+        onCreateManually={() => {
+          setEditLead(null);
+          setFormOpen(true);
+        }}
+      />
+
+      {/* Lead Lists management dialog */}
+      <LeadListsDialog
+        open={leadListsOpen}
+        onOpenChange={setLeadListsOpen}
+        onImportIntoList={(listId) => {
+          setLeadListsOpen(false);
+          setImportPreselectedListId(listId);
+          setImportOpen(true);
+        }}
+        onListsChanged={() => void fetchLeads()}
+      />
 
       {/* Create / Edit dialog */}
       <LeadFormDialog

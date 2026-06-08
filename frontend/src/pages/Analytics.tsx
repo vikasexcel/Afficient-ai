@@ -1,368 +1,350 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
-  ArrowDownRight,
-  ArrowUpRight,
   CalendarDays,
-  PhoneCall,
-  Target,
-  TrendingUp,
-  Users,
+  Download,
+  FileJson,
+  FileSpreadsheet,
+  FileText,
+  Loader2,
+  RefreshCw,
 } from "lucide-react";
 
 import AppLayout from "@/components/layout/AppLayout";
+import AnalyticsDashboard from "@/components/analytics/AnalyticsDashboard";
+import CampaignAnalytics from "@/components/analytics/CampaignAnalytics";
+import EmailAnalytics from "@/components/analytics/EmailAnalytics";
+import CallAnalytics from "@/components/analytics/CallAnalytics";
+import LinkedInAnalytics from "@/components/analytics/LinkedInAnalytics";
+import FunnelAnalytics from "@/components/analytics/FunnelAnalytics";
+import WorkflowAnalytics from "@/components/analytics/WorkflowAnalytics";
 import { cn } from "@/lib/utils";
+import {
+  analyticsApi,
+  type CallAnalyticsData,
+  type EmailAnalyticsData,
+  type FunnelData,
+  type LinkedInAnalyticsData,
+  type OverviewData,
+  type TrendsData,
+  type WorkflowAnalyticsData,
+} from "@/services/analytics";
 
-type Range = "7d" | "30d" | "90d";
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+type Range = 7 | 30 | 90;
+type TabId = "overview" | "campaigns" | "email" | "calls" | "linkedin" | "funnel" | "workflow";
 
 const RANGES: { id: Range; label: string }[] = [
-  { id: "7d", label: "Last 7 days" },
-  { id: "30d", label: "Last 30 days" },
-  { id: "90d", label: "Last 90 days" },
+  { id: 7, label: "7d" },
+  { id: 30, label: "30d" },
+  { id: 90, label: "90d" },
 ];
 
-const KPIS = [
-  {
-    id: "calls",
-    label: "Total calls",
-    value: 1284,
-    delta: 12.4,
-    icon: PhoneCall,
-    accent: "violet",
-  },
-  {
-    id: "leads",
-    label: "Qualified leads",
-    value: 312,
-    delta: 7.2,
-    icon: Target,
-    accent: "emerald",
-  },
-  {
-    id: "talktime",
-    label: "Avg. talk time",
-    value: "4m 12s",
-    delta: -3.1,
-    icon: TrendingUp,
-    accent: "amber",
-  },
-  {
-    id: "contacts",
-    label: "New contacts",
-    value: 528,
-    delta: 18.6,
-    icon: Users,
-    accent: "sky",
-  },
-] as const;
+const TABS: { id: TabId; label: string }[] = [
+  { id: "overview", label: "Overview" },
+  { id: "campaigns", label: "Campaigns" },
+  { id: "email", label: "Email" },
+  { id: "calls", label: "Calls" },
+  { id: "linkedin", label: "LinkedIn" },
+  { id: "funnel", label: "Funnel" },
+  { id: "workflow", label: "Workflow" },
+];
 
-const ACCENTS: Record<
-  (typeof KPIS)[number]["accent"],
-  { icon: string; bar: string }
-> = {
-  violet: {
-    icon: "text-violet-300 bg-violet-500/10 border-violet-500/20",
-    bar: "bg-violet-500/70",
-  },
-  emerald: {
-    icon: "text-emerald-300 bg-emerald-500/10 border-emerald-500/20",
-    bar: "bg-emerald-500/70",
-  },
-  amber: {
-    icon: "text-amber-300 bg-amber-500/10 border-amber-500/20",
-    bar: "bg-amber-500/70",
-  },
-  sky: {
-    icon: "text-sky-300 bg-sky-500/10 border-sky-500/20",
-    bar: "bg-sky-500/70",
-  },
+// ---------------------------------------------------------------------------
+// Export helpers
+// ---------------------------------------------------------------------------
+
+function flattenForCsv(data: Record<string, unknown>, prefix = ""): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(data)) {
+    const key = prefix ? `${prefix}.${k}` : k;
+    if (v !== null && typeof v === "object" && !Array.isArray(v)) {
+      Object.assign(out, flattenForCsv(v as Record<string, unknown>, key));
+    } else if (Array.isArray(v)) {
+      out[key] = v.length;
+    } else {
+      out[key] = v;
+    }
+  }
+  return out;
+}
+
+function downloadFile(content: string, filename: string, type: string) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportCsv(payload: Record<string, unknown>, filename: string) {
+  const flat = flattenForCsv(payload);
+  const headers = Object.keys(flat).join(",");
+  const values = Object.values(flat)
+    .map((v) => (typeof v === "string" && v.includes(",") ? `"${v}"` : String(v ?? "")))
+    .join(",");
+  downloadFile(`${headers}\n${values}`, filename, "text/csv");
+}
+
+function exportJson(payload: unknown, filename: string) {
+  downloadFile(JSON.stringify(payload, null, 2), filename, "application/json");
+}
+
+function exportPdf() {
+  window.print();
+}
+
+// ---------------------------------------------------------------------------
+// Default empty state
+// ---------------------------------------------------------------------------
+
+const EMPTY_OVERVIEW: OverviewData = {
+  campaigns: { total: 0, active: 0, completed: 0, draft: 0, paused: 0, scheduled: 0, archived: 0 },
+  executions: { total: 0, completed: 0, failed: 0, running: 0, queued: 0, completion_rate: 0, failure_rate: 0 },
+  leads: { total: 0, new: 0, contacted: 0, qualified: 0, converted: 0, lost: 0 },
+  total_leads_processed: 0,
 };
 
-const CALL_VOLUME = [
-  { day: "Mon", calls: 142, qualified: 28 },
-  { day: "Tue", calls: 168, qualified: 41 },
-  { day: "Wed", calls: 195, qualified: 47 },
-  { day: "Thu", calls: 211, qualified: 52 },
-  { day: "Fri", calls: 187, qualified: 44 },
-  { day: "Sat", calls: 92, qualified: 18 },
-  { day: "Sun", calls: 74, qualified: 12 },
-];
+const EMPTY_EMAIL: EmailAnalyticsData = { sent: 0, failed: 0, success_rate: 0, daily_trend: [] };
+const EMPTY_CALLS: CallAnalyticsData = { attempted: 0, completed: 0, failed: 0, voicemail: 0, daily_trend: [] };
+const EMPTY_LINKEDIN: LinkedInAnalyticsData = { connections_sent: 0, messages_sent: 0, failed: 0, daily_trend: [] };
+const EMPTY_FUNNEL: FunnelData = {
+  steps: [
+    { label: "Lead Uploaded", count: 0, pct: 100 },
+    { label: "Workflow Started", count: 0, pct: 0 },
+    { label: "Email Sent", count: 0, pct: 0 },
+    { label: "Call Connected", count: 0, pct: 0 },
+    { label: "Qualified", count: 0, pct: 0 },
+    { label: "Meeting Booked", count: 0, pct: 0 },
+  ],
+};
+const EMPTY_WORKFLOW: WorkflowAnalyticsData = {
+  most_used_workflows: [],
+  node_type_distribution: [],
+  total_workflows: 0,
+  total_executions_in_period: 0,
+};
+const EMPTY_TRENDS: TrendsData = { executions_per_day: [], campaign_growth: [] };
 
-const FUNNEL = [
-  { label: "Dialed", count: 1284, color: "bg-sky-500/60" },
-  { label: "Connected", count: 882, color: "bg-violet-500/60" },
-  { label: "Qualified", count: 312, color: "bg-amber-500/60" },
-  { label: "Converted", count: 96, color: "bg-emerald-500/60" },
-];
-
-const TOP_AGENTS = [
-  { name: "Aditi R.", calls: 312, qualified: 88, rate: 28 },
-  { name: "Karan S.", calls: 268, qualified: 71, rate: 26 },
-  { name: "Riya M.", calls: 254, qualified: 62, rate: 24 },
-  { name: "Vikram L.", calls: 198, qualified: 41, rate: 21 },
-  { name: "Naina K.", calls: 174, qualified: 32, rate: 18 },
-];
-
-const TOP_CAMPAIGNS = [
-  { name: "Q2 SaaS · Outbound", calls: 412, conversion: 9.4 },
-  { name: "LATAM Expansion", calls: 286, conversion: 7.8 },
-  { name: "Renewals Win-Back", calls: 218, conversion: 11.2 },
-  { name: "Inbound Demo", calls: 184, conversion: 14.1 },
-];
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
 
 export default function Analytics() {
-  const [range, setRange] = useState<Range>("7d");
+  const [tab, setTab] = useState<TabId>("overview");
+  const [range, setRange] = useState<Range>(30);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const maxCalls = useMemo(
-    () => Math.max(...CALL_VOLUME.map((d) => d.calls)),
-    []
-  );
-  const maxFunnel = FUNNEL[0].count;
+  const [overview, setOverview] = useState<OverviewData>(EMPTY_OVERVIEW);
+  const [email, setEmail] = useState<EmailAnalyticsData>(EMPTY_EMAIL);
+  const [calls, setCalls] = useState<CallAnalyticsData>(EMPTY_CALLS);
+  const [linkedin, setLinkedin] = useState<LinkedInAnalyticsData>(EMPTY_LINKEDIN);
+  const [funnel, setFunnel] = useState<FunnelData>(EMPTY_FUNNEL);
+  const [workflow, setWorkflow] = useState<WorkflowAnalyticsData>(EMPTY_WORKFLOW);
+  const [trends, setTrends] = useState<TrendsData>(EMPTY_TRENDS);
+
+  const load = useCallback(async (days: Range) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [ov, em, ca, li, fu, wf, tr] = await Promise.all([
+        analyticsApi.overview(days),
+        analyticsApi.email(days),
+        analyticsApi.calls(days),
+        analyticsApi.linkedin(days),
+        analyticsApi.funnel(days),
+        analyticsApi.workflow(days),
+        analyticsApi.trends(days),
+      ]);
+      setOverview(ov);
+      setEmail(em);
+      setCalls(ca);
+      setLinkedin(li);
+      setFunnel(fu);
+      setWorkflow(wf);
+      setTrends(tr);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to load analytics");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load(range);
+  }, [range, load]);
+
+  // Export current tab data
+  const handleExport = (format: "csv" | "json" | "pdf") => {
+    const ts = new Date().toISOString().slice(0, 10);
+    const base = `analytics-${tab}-${ts}`;
+
+    const payloads: Record<TabId, unknown> = {
+      overview,
+      campaigns: overview,
+      email,
+      calls,
+      linkedin,
+      funnel,
+      workflow,
+    };
+    const payload = payloads[tab] as Record<string, unknown>;
+
+    if (format === "csv") exportCsv(payload, `${base}.csv`);
+    else if (format === "json") exportJson(payload, `${base}.json`);
+    else exportPdf();
+  };
 
   return (
     <AppLayout>
-      <div className="space-y-6 max-w-6xl">
+      {/* Print styles */}
+      <style>{`@media print { .no-print { display: none !important; } }`}</style>
+
+      <div className="space-y-5 max-w-6xl">
+        {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
           <div className="min-w-0">
-            <h1 className="text-xl sm:text-2xl font-medium text-white">
-              Analytics
-            </h1>
-            <p className="text-[13px] text-white/40 mt-1">
-              Performance overview across calls, leads, and campaigns. Data shown
-              is sample.
+            <h1 className="text-xl sm:text-2xl font-medium text-white">Analytics</h1>
+            <p className="text-[13px] text-white/40 mt-0.5">
+              Business intelligence across campaigns, channels, and lead conversion.
             </p>
           </div>
 
-          <div className="inline-flex items-center rounded-[8px] border border-white/[0.08] bg-white/[0.02] p-0.5 overflow-x-auto max-w-full">
-            <CalendarDays size={13} className="text-white/40 ml-2 mr-1 shrink-0" />
-            {RANGES.map((r) => {
-              const active = range === r.id;
-              return (
+          <div className="flex items-center gap-2 flex-wrap no-print">
+            {/* Date range */}
+            <div className="inline-flex items-center rounded-[8px] border border-white/[0.08] bg-white/[0.02] p-0.5">
+              <CalendarDays size={12} className="text-white/40 ml-2 mr-1 shrink-0" />
+              {RANGES.map((r) => (
                 <button
                   key={r.id}
                   type="button"
                   onClick={() => setRange(r.id)}
                   className={cn(
-                    "px-2.5 h-7 rounded-[6px] text-[12px] transition-colors whitespace-nowrap shrink-0",
-                    active
+                    "px-2.5 h-7 rounded-[6px] text-[12px] transition-colors whitespace-nowrap",
+                    range === r.id
                       ? "bg-white/[0.06] text-white"
-                      : "text-white/55 hover:text-white/85"
+                      : "text-white/55 hover:text-white/85",
                   )}
                 >
                   {r.label}
                 </button>
-              );
-            })}
-          </div>
-        </div>
+              ))}
+            </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {KPIS.map((kpi) => {
-            const Icon = kpi.icon;
-            const up = kpi.delta >= 0;
-            return (
-              <div
-                key={kpi.id}
-                className="rounded-[10px] border border-white/[0.06] bg-white/[0.02] p-4"
+            {/* Refresh */}
+            <button
+              type="button"
+              onClick={() => load(range)}
+              disabled={loading}
+              className="h-8 w-8 rounded-[8px] border border-white/[0.08] bg-white/[0.02] flex items-center justify-center text-white/50 hover:text-white/80 transition-colors disabled:opacity-40"
+              title="Refresh"
+            >
+              {loading ? (
+                <Loader2 size={13} className="animate-spin" />
+              ) : (
+                <RefreshCw size={13} />
+              )}
+            </button>
+
+            {/* Export dropdown */}
+            <div className="relative group">
+              <button
+                type="button"
+                className="h-8 px-3 rounded-[8px] border border-white/[0.08] bg-white/[0.02] flex items-center gap-1.5 text-[12px] text-white/60 hover:text-white/85 transition-colors"
               >
-                <div className="flex items-center justify-between">
-                  <div
-                    className={cn(
-                      "h-8 w-8 rounded-[8px] border flex items-center justify-center",
-                      ACCENTS[kpi.accent].icon
-                    )}
+                <Download size={12} />
+                Export
+              </button>
+              <div className="absolute right-0 top-full mt-1 w-44 rounded-[10px] border border-white/[0.08] bg-[#0e0e14] shadow-2xl hidden group-hover:block z-20">
+                {[
+                  { id: "csv", label: "CSV Export", icon: FileSpreadsheet },
+                  { id: "json", label: "JSON Export", icon: FileJson },
+                  { id: "pdf", label: "PDF Summary", icon: FileText },
+                ].map(({ id, label, icon: Icon }) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => handleExport(id as "csv" | "json" | "pdf")}
+                    className="w-full flex items-center gap-2.5 px-3 py-2.5 text-[12px] text-white/65 hover:text-white hover:bg-white/[0.04] transition-colors first:rounded-t-[10px] last:rounded-b-[10px]"
                   >
-                    <Icon size={13} />
-                  </div>
-                  <span
-                    className={cn(
-                      "inline-flex items-center gap-0.5 text-[11px] font-medium",
-                      up ? "text-emerald-300" : "text-red-300"
-                    )}
-                  >
-                    {up ? (
-                      <ArrowUpRight size={12} />
-                    ) : (
-                      <ArrowDownRight size={12} />
-                    )}
-                    {Math.abs(kpi.delta)}%
-                  </span>
-                </div>
-                <div className="mt-3">
-                  <div className="text-[11px] text-white/45 uppercase tracking-wider">
-                    {kpi.label}
-                  </div>
-                  <div className="text-[20px] font-semibold text-white mt-0.5">
-                    {kpi.value}
-                  </div>
-                </div>
+                    <Icon size={12} className="shrink-0" />
+                    {label}
+                  </button>
+                ))}
               </div>
-            );
-          })}
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="lg:col-span-2 rounded-[12px] border border-white/[0.06] bg-white/[0.02] p-5">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-[14px] font-medium text-white">
-                  Call volume
-                </h2>
-                <p className="text-[12px] text-white/40">
-                  Daily calls and qualified leads
-                </p>
-              </div>
-              <div className="flex items-center gap-3 text-[11px] text-white/55">
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="h-2 w-2 rounded-sm bg-violet-500/70" />
-                  Calls
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="h-2 w-2 rounded-sm bg-emerald-500/70" />
-                  Qualified
-                </span>
-              </div>
-            </div>
-
-            <div className="mt-5 flex items-end gap-3 h-44">
-              {CALL_VOLUME.map((d) => (
-                <div
-                  key={d.day}
-                  className="flex-1 flex flex-col items-center gap-1"
-                >
-                  <div className="w-full flex items-end justify-center gap-1 h-full">
-                    <div
-                      className="w-3 rounded-t-[3px] bg-violet-500/70"
-                      style={{ height: `${(d.calls / maxCalls) * 100}%` }}
-                      title={`${d.calls} calls`}
-                    />
-                    <div
-                      className="w-3 rounded-t-[3px] bg-emerald-500/70"
-                      style={{
-                        height: `${(d.qualified / maxCalls) * 100}%`,
-                      }}
-                      title={`${d.qualified} qualified`}
-                    />
-                  </div>
-                  <span className="text-[10px] text-white/45">{d.day}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="rounded-[12px] border border-white/[0.06] bg-white/[0.02] p-5">
-            <h2 className="text-[14px] font-medium text-white">
-              Conversion funnel
-            </h2>
-            <p className="text-[12px] text-white/40">
-              From dial to converted
-            </p>
-
-            <div className="mt-5 space-y-3">
-              {FUNNEL.map((step) => {
-                const pct = Math.round((step.count / maxFunnel) * 100);
-                return (
-                  <div key={step.label}>
-                    <div className="flex items-center justify-between text-[12px]">
-                      <span className="text-white/75">{step.label}</span>
-                      <span className="text-white/55">
-                        {step.count.toLocaleString()}{" "}
-                        <span className="text-white/35">({pct}%)</span>
-                      </span>
-                    </div>
-                    <div className="mt-1 h-1.5 w-full rounded-full bg-white/[0.05] overflow-hidden">
-                      <div
-                        className={cn("h-full rounded-full", step.color)}
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
             </div>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <div className="rounded-[12px] border border-white/[0.06] bg-white/[0.02] p-5">
-            <h2 className="text-[14px] font-medium text-white">Top agents</h2>
-            <p className="text-[12px] text-white/40">
-              By qualified-lead rate
-            </p>
-
-            <div className="mt-4 space-y-3">
-              {TOP_AGENTS.map((a) => (
-                <div
-                  key={a.name}
-                  className="flex items-center justify-between gap-3"
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-white/[0.06] border border-white/[0.08] text-[10px] font-medium text-white/80">
-                      {a.name
-                        .split(" ")
-                        .map((p) => p[0])
-                        .join("")}
-                    </span>
-                    <div className="min-w-0">
-                      <div className="text-[13px] text-white truncate">
-                        {a.name}
-                      </div>
-                      <div className="text-[11px] text-white/40">
-                        {a.calls} calls · {a.qualified} qualified
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <div className="hidden sm:block w-16 md:w-20 h-1.5 rounded-full bg-white/[0.05] overflow-hidden">
-                      <div
-                        className="h-full bg-violet-500/70 rounded-full"
-                        style={{ width: `${a.rate * 3}%` }}
-                      />
-                    </div>
-                    <span className="text-[12px] text-white/75 w-8 text-right">
-                      {a.rate}%
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
+        {/* Error banner */}
+        {error && (
+          <div className="rounded-[8px] border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-[13px] text-rose-300">
+            {error}
           </div>
+        )}
 
-          <div className="rounded-[12px] border border-white/[0.06] bg-white/[0.02] p-5">
-            <h2 className="text-[14px] font-medium text-white">
-              Top campaigns
-            </h2>
-            <p className="text-[12px] text-white/40">By conversion rate</p>
-
-            <div className="mt-4 space-y-3">
-              {TOP_CAMPAIGNS.map((c) => (
-                <div
-                  key={c.name}
-                  className="flex items-center justify-between gap-3"
-                >
-                  <div className="min-w-0">
-                    <div className="text-[13px] text-white truncate">
-                      {c.name}
-                    </div>
-                    <div className="text-[11px] text-white/40">
-                      {c.calls} calls
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <div className="hidden sm:block w-16 md:w-20 h-1.5 rounded-full bg-white/[0.05] overflow-hidden">
-                      <div
-                        className="h-full bg-emerald-500/70 rounded-full"
-                        style={{ width: `${c.conversion * 6}%` }}
-                      />
-                    </div>
-                    <span className="text-[12px] text-white/75 w-12 text-right">
-                      {c.conversion}%
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
+        {/* Tabs */}
+        <div className="border-b border-white/[0.06] no-print">
+          <div className="flex items-center gap-0 overflow-x-auto">
+            {TABS.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setTab(t.id)}
+                className={cn(
+                  "px-4 py-2.5 text-[13px] whitespace-nowrap border-b-2 transition-colors shrink-0",
+                  tab === t.id
+                    ? "border-violet-500 text-white"
+                    : "border-transparent text-white/50 hover:text-white/80",
+                )}
+              >
+                {t.label}
+              </button>
+            ))}
           </div>
         </div>
+
+        {/* Loading overlay */}
+        {loading && (
+          <div className="flex items-center justify-center py-16">
+            <div className="flex items-center gap-2 text-white/50 text-[13px]">
+              <Loader2 size={16} className="animate-spin" />
+              Loading analytics…
+            </div>
+          </div>
+        )}
+
+        {/* Tab content */}
+        {!loading && (
+          <div>
+            {tab === "overview" && (
+              <AnalyticsDashboard overview={overview} trends={trends} />
+            )}
+            {tab === "campaigns" && (
+              <CampaignAnalytics overview={overview} />
+            )}
+            {tab === "email" && (
+              <EmailAnalytics data={email} />
+            )}
+            {tab === "calls" && (
+              <CallAnalytics data={calls} />
+            )}
+            {tab === "linkedin" && (
+              <LinkedInAnalytics data={linkedin} />
+            )}
+            {tab === "funnel" && (
+              <FunnelAnalytics data={funnel} />
+            )}
+            {tab === "workflow" && (
+              <WorkflowAnalytics data={workflow} />
+            )}
+          </div>
+        )}
       </div>
     </AppLayout>
   );

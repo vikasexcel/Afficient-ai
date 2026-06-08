@@ -222,6 +222,7 @@ class LeadsService:
 
         lead = Lead(
             organization_id=organization_id,
+            display_name=data.display_name,
             first_name=data.first_name.strip(),
             last_name=(data.last_name.strip() if data.last_name else None),
             email=data.email,
@@ -296,6 +297,7 @@ class LeadsService:
             lead.tags = sorted(set(tags)) if tags else None
 
         for attr in (
+            "display_name",
             "email",
             "linkedin_url",
             "company",

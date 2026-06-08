@@ -109,8 +109,10 @@ const launchSchema = z.object({
     .trim()
     .min(2, "Name must be at least 2 characters")
     .max(120, "Name is too long"),
-  playbook_id: z.string().min(1, "Pick a playbook"),
-  lead_list_id: z.string().min(1, "Pick a lead list"),
+  // Optional — campaigns created via the wizard don't have a playbook.
+  // Required only at launch time (checked manually in handleLaunch).
+  playbook_id: z.string().nullable().optional(),
+  lead_list_id: z.string().nullable().optional(),
   schedule: scheduleSchema,
   business_hours: businessHoursSchema,
 });
@@ -308,9 +310,14 @@ export default function CreateCampaignDialog({
    * (not just inside the trigger's onOpenChange) so the controlled edit
    * dialog — which mounts already-open — also loads playbooks + lead lists. */
   useEffect(() => {
-    if (open && !refsLoadedRef.current) {
-      refsLoadedRef.current = true;
-      void loadRefs();
+    if (open) {
+      if (!refsLoadedRef.current) {
+        refsLoadedRef.current = true;
+        void loadRefs();
+      }
+    } else {
+      // Reset so that next open always fetches fresh refs.
+      refsLoadedRef.current = false;
     }
   }, [open, loadRefs]);
 
@@ -360,6 +367,15 @@ export default function CreateCampaignDialog({
   }
 
   const handleLaunch = form.handleSubmit(async (values) => {
+    // Manual checks for fields that are optional for draft but required to launch.
+    if (!values.playbook_id) {
+      form.setError("playbook_id", { message: "Pick a playbook to launch" });
+      return;
+    }
+    if (!values.lead_list_id) {
+      form.setError("lead_list_id", { message: "Pick a lead list to launch" });
+      return;
+    }
     setSubmitting("launch");
     try {
       const campaignId = await persist(values as CampaignDraft);
@@ -461,7 +477,7 @@ export default function CreateCampaignDialog({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <FormField
                 label="Playbook"
-                required
+                required={!isEditing}
                 error={errors.playbook_id?.message}
               >
                 <Controller
@@ -469,8 +485,10 @@ export default function CreateCampaignDialog({
                   name="playbook_id"
                   render={({ field }) => (
                     <Select
-                      value={field.value ?? undefined}
-                      onValueChange={(v) => field.onChange(v)}
+                      value={field.value ?? "__none__"}
+                      onValueChange={(v) =>
+                        field.onChange(v === "__none__" ? null : v)
+                      }
                       disabled={loadingRefs}
                     >
                       <SelectTrigger
@@ -489,11 +507,11 @@ export default function CreateCampaignDialog({
                         className="bg-[#111114] border-white/[0.08]"
                         position="popper"
                       >
-                        {playbooks.length === 0 && !loadingRefs && (
-                          <div className="px-3 py-6 text-[12px] text-white/45 text-center">
-                            No playbooks yet — create one first.
-                          </div>
-                        )}
+                        <SelectItem value="__none__">
+                          <span className="text-white/40 text-[13px]">
+                            {loadingRefs ? "Loading…" : "— No playbook —"}
+                          </span>
+                        </SelectItem>
                         {playbooks.map((pb) => (
                           <SelectItem key={pb.id} value={pb.id}>
                             <div className="flex flex-col">
@@ -512,7 +530,7 @@ export default function CreateCampaignDialog({
 
               <FormField
                 label="Lead list"
-                required
+                required={!isEditing}
                 error={errors.lead_list_id?.message}
               >
                 <Controller
@@ -520,8 +538,10 @@ export default function CreateCampaignDialog({
                   name="lead_list_id"
                   render={({ field }) => (
                     <Select
-                      value={field.value ?? undefined}
-                      onValueChange={(v) => field.onChange(v)}
+                      value={field.value ?? "__none__"}
+                      onValueChange={(v) =>
+                        field.onChange(v === "__none__" ? null : v)
+                      }
                       disabled={loadingRefs}
                     >
                       <SelectTrigger
@@ -540,11 +560,11 @@ export default function CreateCampaignDialog({
                         className="bg-[#111114] border-white/[0.08]"
                         position="popper"
                       >
-                        {leadLists.length === 0 && !loadingRefs && (
-                          <div className="px-3 py-6 text-[12px] text-white/45 text-center">
-                            No lead lists available.
-                          </div>
-                        )}
+                        <SelectItem value="__none__">
+                          <span className="text-white/40 text-[13px]">
+                            {loadingRefs ? "Loading…" : "— No lead list —"}
+                          </span>
+                        </SelectItem>
                         {leadLists.map((list) => (
                           <SelectItem key={list.id} value={list.id}>
                             <div className="flex items-center justify-between gap-3 w-full">
@@ -558,7 +578,7 @@ export default function CreateCampaignDialog({
                               </div>
                               <span className="text-[11px] text-white/55 inline-flex items-center gap-1">
                                 <Users size={10} />
-                                {list.lead_count.toLocaleString()}
+                                {(list.lead_count ?? 0).toLocaleString()}
                               </span>
                             </div>
                           </SelectItem>

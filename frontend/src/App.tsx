@@ -7,6 +7,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { RouterProvider } from "react-router-dom";
 import { router } from "@/router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 10_000 } },
@@ -30,16 +31,18 @@ export default function App() {
   }, [token]);
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <ThemeProvider
-        attribute="class"
-        defaultTheme="dark"
-        enableSystem
-        storageKey="afficient-theme"
-      >
-        <RouterProvider router={router} />
-        <Toaster />
-      </ThemeProvider>
-    </QueryClientProvider>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider
+          attribute="class"
+          defaultTheme="dark"
+          enableSystem
+          storageKey="afficient-theme"
+        >
+          <RouterProvider router={router} />
+          <Toaster />
+        </ThemeProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
   );
 }

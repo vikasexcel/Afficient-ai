@@ -18,7 +18,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from common.logging import get_logger
@@ -249,6 +249,25 @@ async def get_transcript(
 # ---------------------------------------------------------------------------
 
 
+def _assert_call_org(db: Session, call_id: str, org: uuid.UUID | None) -> None:
+    """Raise 404 if ``call_id`` exists in the DB and belongs to a different org.
+
+    Allows through when:
+    * The call is not yet persisted (live, Redis-only call).
+    * The call row has ``organization_id=None`` (legacy/admin).
+    * The caller's org matches the call's org.
+    """
+    call_row = AICallRepository.get(db, call_id)
+    if call_row is None:
+        return  # live call not yet persisted — allow
+    if (
+        call_row.organization_id is not None
+        and org is not None
+        and call_row.organization_id != org
+    ):
+        raise HTTPException(404, "call not found")
+
+
 @router.get(
     "/calls/{call_id}/qualification",
     response_model=QualificationGetResponse,
@@ -256,9 +275,11 @@ async def get_transcript(
 async def get_qualification(
     call_id: str,
     framework: str | None = None,
+    db: Session = Depends(get_db),
     tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
     svc: AIService = Depends(get_ai_service),
 ):
+    _assert_call_org(db, call_id, _tenant_org_id(tenant))
     try:
         snapshot: QualificationSnapshot = await svc.get_qualification(
             call_id, framework=framework
@@ -322,7 +343,7 @@ async def finalize_call(
 
 @router.get("/calls", response_model=CallListResponse)
 async def list_calls(
-    limit: int = 50,
+    limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
     tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
 ):
@@ -415,6 +436,7 @@ async def list_calls(
 @router.get("/calls/{call_id}/interruptions")
 async def list_interruptions(
     call_id: str,
+    db: Session = Depends(get_db),
     tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
     svc: AIService = Depends(get_ai_service),
 ):
@@ -426,6 +448,7 @@ async def list_interruptions(
     history is required.
     """
 
+    _assert_call_org(db, call_id, _tenant_org_id(tenant))
     log_store = InterruptionLog(svc.memory)
     try:
         events = await log_store.list_for_call(call_id)

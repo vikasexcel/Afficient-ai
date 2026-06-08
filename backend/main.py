@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from common.logging import configure_logging, get_logger
+from common.middleware import CorrelationIdMiddleware, global_exception_handler
 from common.security.protection import RateLimitMiddleware
 from config.settings import settings
 from modules.ai.dependencies import shutdown_ai
@@ -25,6 +26,7 @@ from modules.leads.router import list_router as lead_lists_router
 from modules.leads.router import router as leads_router
 from modules.tts.router import router as tts_router
 from modules.campaign.template_router import router as workflow_templates_router
+from modules.analytics.router import router as analytics_router
 
 
 @asynccontextmanager
@@ -83,7 +85,13 @@ app = FastAPI(
     version="1.0",
     lifespan=lifespan,
 )
+
+# Correlation IDs must be outermost so request_id is available everywhere.
+app.add_middleware(CorrelationIdMiddleware)
 app.add_middleware(RateLimitMiddleware)
+
+# Global catch-all for unhandled exceptions — returns structured JSON 500.
+app.add_exception_handler(Exception, global_exception_handler)  # type: ignore[arg-type]
 _is_prod = (settings.ENV or "").lower() == "production"
 app.add_middleware(
     CORSMiddleware,
@@ -132,8 +140,45 @@ for r in (
     leads_router,
     lead_lists_router,
     workflow_templates_router,
+    analytics_router,
 ):
     app.include_router(r, prefix=settings.API_PREFIX)
+
+# ---------------------------------------------------------------------------
+# Prometheus metrics — instrumentation via prometheus-fastapi-instrumentator.
+# Exposes GET /metrics (Prometheus text format) for scraping by Prometheus /
+# Grafana Agent / Datadog OpenMetrics collector.
+#
+# Metrics included (default instrumentator profile):
+#   * http_requests_total (by method, handler, status)
+#   * http_request_duration_seconds (latency histogram by handler)
+#   * http_request_size_bytes / http_response_size_bytes
+#   * in_flight requests gauge
+#
+# The endpoint is intentionally NOT added to RATE_LIMIT_EXEMPT_PATHS — it
+# should be protected by network policy (scrape-only access from the
+# Prometheus server) or by adding it to the exempt list in production.
+# ---------------------------------------------------------------------------
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator
+
+    Instrumentator(
+        should_group_status_codes=True,
+        should_ignore_untemplated=True,
+        should_respect_env_var=True,  # honour ENABLE_METRICS env var
+        should_instrument_requests_inprogress=True,
+        excluded_handlers=[
+            "/health",
+            "/health/ready",
+            "/",
+        ],
+    ).instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+    get_logger("app").info("app.metrics_enabled", endpoint="/metrics")
+except ImportError:
+    get_logger("app").warning(
+        "app.metrics_disabled",
+        reason="prometheus-fastapi-instrumentator not installed",
+    )
 
 
 # Serve uploaded voicemail recordings over a public route so Twilio's cloud

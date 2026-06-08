@@ -24,7 +24,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { formatLeadError, getLead } from "@/services/leads";
-import { leadFullName } from "@/types/lead";
+import { leadDisplayName, leadFullName } from "@/types/lead";
 import type { Lead, LeadList, LeadStatus } from "@/types/lead";
 
 // ---------------------------------------------------------------------------
@@ -112,9 +112,12 @@ export default function LeadDrawer({
 
   if (!lead) return null;
 
-  const fullName = leadFullName(lead);
+  const displayName = leadDisplayName(lead);
+  const contactName = leadFullName(lead);
+  const hasCustomDisplay =
+    lead.display_name?.trim() && lead.display_name.trim() !== contactName;
   const status = STATUS_CONFIG[lead.status];
-  const initials = fullName
+  const initials = displayName
     .split(" ")
     .map((p) => p[0])
     .join("")
@@ -145,8 +148,13 @@ export default function LeadDrawer({
 
             <div className="min-w-0 flex-1">
               <SheetTitle className="text-[16px] font-medium text-white leading-tight truncate">
-                {fullName}
+                {displayName}
               </SheetTitle>
+              {hasCustomDisplay && (
+                <p className="text-[12px] text-white/50 leading-tight truncate mt-0.5">
+                  {contactName}
+                </p>
+              )}
               <div className="flex items-center gap-2 mt-1.5 flex-wrap">
                 <span
                   className={cn(
@@ -174,7 +182,7 @@ export default function LeadDrawer({
             </Button>
           </div>
           <SheetDescription className="sr-only">
-            Details for {fullName}
+            Details for {displayName}
           </SheetDescription>
         </SheetHeader>
 

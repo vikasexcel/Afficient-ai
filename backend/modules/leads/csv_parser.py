@@ -25,6 +25,13 @@ _PHONE_ALLOWED_RE = re.compile(r"^[+\d\s().\-]+$")
 # Column synonyms — the FE/UX lets users drop any CSV with reasonable
 # headers and we'll guess the mapping. Lowercase + stripped on both sides.
 _COLUMN_SYNONYMS: dict[str, tuple[str, ...]] = {
+    "display_name": (
+        "display_name",
+        "display name",
+        "lead_name",
+        "lead name",
+        "alias",
+    ),
     "name": (
         "name",
         "full name",
@@ -32,7 +39,6 @@ _COLUMN_SYNONYMS: dict[str, tuple[str, ...]] = {
         "contact",
         "contact name",
         "lead",
-        "lead name",
     ),
     "email": ("email", "email address", "e-mail", "work email"),
     "phone": (
@@ -109,6 +115,7 @@ def validate_row(
 ) -> dict:
     """Return a ``UploadParsedRow``-compatible dict for a single row."""
 
+    display_name = _value(raw, columns.get("display_name")) or None
     name = _value(raw, columns["name"])
     email = _value(raw, columns["email"])
     phone = _value(raw, columns["phone"])
@@ -157,6 +164,7 @@ def validate_row(
 
     return {
         "row_number": row_number,
+        "display_name": display_name,
         "name": name or None,
         "email": email or None,
         "phone": phone or None,
