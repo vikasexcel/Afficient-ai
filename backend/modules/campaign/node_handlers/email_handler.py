@@ -83,8 +83,9 @@ class EmailNodeHandler(BaseNodeHandler):
                 },
             )
 
-        subject_template: str = node.get("subject") or ""
-        body_template: str = node.get("body") or ""
+        _cfg = node.get("config") or {}
+        subject_template: str = _cfg.get("subject") or node.get("subject") or ""
+        body_template: str = _cfg.get("body") or node.get("body") or ""
 
         # ------------------------------------------------------------------ #
         # Resolve org_id from the campaign context so the activity can be
