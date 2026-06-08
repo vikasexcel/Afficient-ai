@@ -1,9 +1,10 @@
 import { GitCommitHorizontal } from "lucide-react";
 import type { WorkflowVersionSummary } from "@/types/workflow";
+import { parseUtcDate } from "@/lib/utils";
 
 /** Format an ISO date string as a human-readable relative time. */
 export function timeAgo(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
+  const diff = Date.now() - parseUtcDate(iso).getTime();
   const s = Math.floor(diff / 1000);
   if (s < 60) return "just now";
   const m = Math.floor(s / 60);

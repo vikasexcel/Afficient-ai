@@ -1,4 +1,5 @@
 import { api } from "./auth";
+import { parseUtcDate } from "@/lib/utils";
 import type {
   BusinessHours,
   CampaignCreateInput,
@@ -208,7 +209,7 @@ function splitInstant(
   iso: string,
   tz: string
 ): { date: string; time: string } {
-  const d = new Date(iso);
+  const d = parseUtcDate(iso);
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: tz,
     year: "numeric",

@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import type { MonitorExecution } from "@/types/monitor";
+import { parseUtcDate } from "@/lib/utils";
 
 const STATUS_TABS = ["all", "queued", "running", "completed", "failed"] as const;
 type StatusTab = typeof STATUS_TABS[number];
@@ -19,7 +20,7 @@ const NODE_COLORS: Record<string, string> = {
 };
 
 function timeAgo(iso: string) {
-  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  const s = Math.floor((Date.now() - parseUtcDate(iso).getTime()) / 1000);
   if (s < 60) return `${s}s ago`;
   const m = Math.floor(s / 60);
   if (m < 60) return `${m}m ago`;

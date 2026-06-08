@@ -1,4 +1,5 @@
 import { X, ArrowRight } from "lucide-react";
+import { parseUtcDate } from "@/lib/utils";
 import {
   Sheet,
   SheetContent,
@@ -20,7 +21,7 @@ const NODE_DOT: Record<string, string> = {
 };
 
 function formatTs(iso: string) {
-  return new Date(iso).toLocaleString("en-US", {
+  return parseUtcDate(iso).toLocaleString("en-US", {
     month: "short", day: "numeric",
     hour: "2-digit", minute: "2-digit", second: "2-digit",
   });

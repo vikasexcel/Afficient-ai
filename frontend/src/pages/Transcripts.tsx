@@ -15,7 +15,7 @@ import { toast } from "sonner";
 import AppLayout from "@/components/layout/AppLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { cn } from "@/lib/utils";
+import { cn, parseUtcDate } from "@/lib/utils";
 import {
   finalizeCall,
   getTranscript,
@@ -50,7 +50,7 @@ function formatDuration(ms: number | null): string | null {
 }
 
 function formatRelative(iso: string): string {
-  const ts = new Date(iso).getTime();
+  const ts = parseUtcDate(iso).getTime();
   if (Number.isNaN(ts)) return iso;
   const diff = Date.now() - ts;
   const min = Math.floor(diff / 60000);
@@ -60,7 +60,7 @@ function formatRelative(iso: string): string {
   if (hr < 24) return `${hr}h ago`;
   const day = Math.floor(hr / 24);
   if (day < 30) return `${day}d ago`;
-  return new Date(iso).toLocaleDateString();
+  return parseUtcDate(iso).toLocaleDateString();
 }
 
 const SENTIMENT_STYLES: Record<Sentiment, { label: string; className: string }> =

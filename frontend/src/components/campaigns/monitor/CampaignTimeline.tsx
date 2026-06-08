@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import type { MonitorExecution, CampaignMonitorPayload } from "@/types/monitor";
+import { parseUtcDate } from "@/lib/utils";
 
 const NODE_DOT: Record<string, string> = {
   EMAIL: "bg-violet-500", CALL: "bg-indigo-500", WAIT: "bg-amber-500",
@@ -25,7 +26,7 @@ function statusColor(status: MonitorExecution["status"]) {
 }
 
 function formatTs(iso: string) {
-  return new Date(iso).toLocaleTimeString("en-US", {
+  return parseUtcDate(iso).toLocaleTimeString("en-US", {
     hour: "2-digit", minute: "2-digit", second: "2-digit",
   });
 }
@@ -64,7 +65,7 @@ export default function CampaignTimeline({ data }: Props) {
 
   const activities = useMemo(() => {
     return [...data.executions]
-      .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+      .sort((a, b) => parseUtcDate(b.updated_at).getTime() - parseUtcDate(a.updated_at).getTime())
       .slice(0, 20)
       .map((ex) => {
         const nodeType = ex.current_node_id ? (nodeTypeMap[ex.current_node_id] ?? "UNKNOWN") : "UNKNOWN";

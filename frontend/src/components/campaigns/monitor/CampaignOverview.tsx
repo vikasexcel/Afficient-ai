@@ -1,4 +1,5 @@
 import type { CampaignMonitorPayload } from "@/types/monitor";
+import { parseUtcDate } from "@/lib/utils";
 
 const STATUS_STYLES: Record<string, string> = {
   draft: "bg-amber-500/10 text-amber-300 border-amber-500/20",
@@ -10,7 +11,7 @@ const STATUS_STYLES: Record<string, string> = {
 };
 
 function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString("en-US", {
+  return parseUtcDate(iso).toLocaleDateString("en-US", {
     year: "numeric", month: "short", day: "numeric",
     hour: "2-digit", minute: "2-digit",
   });

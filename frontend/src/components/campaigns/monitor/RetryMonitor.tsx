@@ -1,8 +1,9 @@
 import type { MonitorExecution } from "@/types/monitor";
+import { parseUtcDate } from "@/lib/utils";
 
 function formatNext(iso: string | null) {
   if (!iso) return "—";
-  const d = new Date(iso);
+  const d = parseUtcDate(iso);
   const diff = d.getTime() - Date.now();
   if (diff <= 0) return "due now";
   const m = Math.floor(diff / 60000);
