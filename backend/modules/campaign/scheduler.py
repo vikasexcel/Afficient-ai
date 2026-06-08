@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from common.logging import get_logger
@@ -221,8 +222,29 @@ class CampaignScheduler:
         denom = total_leads if total_leads else enqueued_total
         progress = round((terminal / denom) * 100, 1) if denom else 0.0
 
-        retry_stats = CampaignScheduler._retry_stats(db, campaign.id)
-        voicemail_stats = CampaignScheduler._voicemail_stats(db, campaign.id)
+        try:
+            retry_stats = CampaignScheduler._retry_stats(db, campaign.id)
+        except Exception:
+            db.rollback()
+            retry_stats = {
+                "total_retries": 0,
+                "retry_success_rate": 0.0,
+                "exhausted_retries": 0,
+                "average_attempts_per_call": 0.0,
+            }
+
+        try:
+            voicemail_stats = CampaignScheduler._voicemail_stats(db, campaign.id)
+        except Exception:
+            # Graceful fallback if AMD columns haven't been migrated yet.
+            db.rollback()
+            voicemail_stats = {
+                "human_answered": 0,
+                "voicemail_detected": 0,
+                "voicemail_dropped": 0,
+                "voicemail_retry_count": 0,
+                "voicemail_success_rate": 0.0,
+            }
 
         return {
             "campaign_id": str(campaign.id),
