@@ -332,6 +332,20 @@ class CampaignService:
                 campaign_id=str(campaign.id),
                 workflow_id=str(existing.id),
             )
+            # The workflow was pre-created (e.g. by saveWorkflow during the
+            # wizard) before the campaign was explicitly activated.  Ensure the
+            # campaign status reflects the live workflow so the UI shows
+            # "active" rather than staying on "draft".
+            if campaign.status not in (
+                CAMPAIGN_STATUS_ACTIVE,
+                CAMPAIGN_STATUS_SCHEDULED,
+            ):
+                campaign.status = CAMPAIGN_STATUS_ACTIVE
+                db.commit()
+                log.info(
+                    "campaign.activate.status_promoted",
+                    campaign_id=str(campaign.id),
+                )
             return {
                 "workflow_id": str(existing.id),
                 "state": existing.state,
