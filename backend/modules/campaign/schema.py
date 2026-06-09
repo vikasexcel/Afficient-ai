@@ -356,6 +356,59 @@ class WorkflowRestoreResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Workflow test-run schemas
+# ---------------------------------------------------------------------------
+
+
+class WorkflowTestRequest(BaseModel):
+    """POST /{campaign_id}/workflow/test — request body."""
+
+    test_email: str = Field(
+        ...,
+        description="Recipient email address to send the test email to.",
+    )
+    test_phone: str = Field(
+        default="",
+        description=(
+            "Phone number override for CALL nodes.  When empty the lead's "
+            "phone from the workflow context is used (or the node's configured "
+            "to_number)."
+        ),
+    )
+    skip_wait: bool = Field(
+        default=True,
+        description=(
+            "When True, WAIT nodes are skipped (duration set to 0) so the "
+            "test completes immediately.  Set to False to run at real cadence."
+        ),
+    )
+
+
+class WorkflowTestLogEntry(BaseModel):
+    """One step in the workflow test-run log."""
+
+    step: int
+    node_id: str
+    node_type: str
+    node_label: str
+    status: str  # "running" | "completed" | "skipped" | "failed" | "condition_true" | "condition_false"
+    message: str
+    output: dict[str, Any] | None = None
+    timestamp: str  # ISO 8601
+
+
+class WorkflowTestResponse(BaseModel):
+    """POST /{campaign_id}/workflow/test — response body."""
+
+    workflow_id: str
+    test_email: str
+    test_phone: str
+    result: str  # "completed" | "stopped" | "failed"
+    logs: list[WorkflowTestLogEntry]
+    error: str | None = None
+
+
+# ---------------------------------------------------------------------------
 # Campaign Monitor payload (Phase 4F)
 # ---------------------------------------------------------------------------
 

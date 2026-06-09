@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from common.logging import get_logger
@@ -160,10 +161,24 @@ class EmailService:
 
         error: str | None = None
         sent = False
+        message_id: str | None = None
+        sent_at: str | None = None
 
         try:
-            _smtp_send(to=to, subject=subject, text_body=body)
+            result_meta = _smtp_send(to=to, subject=subject, text_body=body)
             sent = True
+            sent_at = datetime.now(timezone.utc).isoformat()
+            # _smtp_send now returns {"message_id": "<...>"} — capture it so the
+            # CONDITION/EMAIL_REPLIED handler can search IMAP by In-Reply-To header.
+            if isinstance(result_meta, dict):
+                message_id = result_meta.get("message_id")
+            log.info(
+                "campaign.email.sent_with_tracking",
+                to=to,
+                subject=subject,
+                message_id=message_id,
+                sent_at=sent_at,
+            )
         except Exception as exc:
             error = str(exc)
             log.warning(
@@ -186,6 +201,8 @@ class EmailService:
             "to": to,
             "subject": subject,
             "sent": sent,
+            "sent_at": sent_at,
+            "message_id": message_id,
             "error": error,
         }
 

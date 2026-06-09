@@ -11,10 +11,12 @@ import BaseNode from "./BaseNode";
 import type { NodeData, ConditionConfig } from "@/types/workflow";
 
 const CONDITION_LABELS: Record<string, string> = {
-  EMAIL_SENT: "Email sent",
-  EMAIL_FAILED: "Email failed",
-  CALL_COMPLETED: "Call completed",
-  CALL_FAILED: "Call failed",
+  EMAIL_SENT: "Email sent?",
+  EMAIL_FAILED: "Email failed?",
+  EMAIL_REPLIED: "Replied within window?",
+  NEGATIVE_REPLY: "Negative / opt-out reply?",
+  CALL_COMPLETED: "Call completed?",
+  CALL_FAILED: "Call failed?",
 };
 
 export default function ConditionNode({ data, selected }: NodeProps<NodeData>) {

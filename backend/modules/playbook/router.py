@@ -133,6 +133,22 @@ def archive_playbook(
         raise _to_http(exc) from exc
 
 
+@router.delete("/{playbook_id}", status_code=204)
+def delete_playbook(
+    playbook_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    tenant=Depends(requires(Role.OWNER, Role.ADMIN)),
+):
+    """Permanently delete a playbook (hard delete).
+
+    Use ``POST /{id}/archive`` when you want to soft-delete instead.
+    """
+    try:
+        PlaybookService.delete(db, _org_id(tenant), playbook_id)
+    except PlaybookError as exc:
+        raise _to_http(exc) from exc
+
+
 @router.post("/{playbook_id}/duplicate", response_model=PlaybookDetail)
 def duplicate_playbook(
     playbook_id: uuid.UUID,

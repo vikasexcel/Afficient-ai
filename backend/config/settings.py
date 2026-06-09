@@ -34,6 +34,31 @@ class Settings(BaseSettings):
     SMTP_FROM_NAME: str = "Aifficient"
     APP_LOGIN_URL: str = "http://localhost:5173/login"
 
+    # IMAP settings for inbound email reply detection (legacy fallback)
+    IMAP_HOST: str = ""
+    IMAP_PORT: int = 993
+    IMAP_USER: str = ""
+    IMAP_PASSWORD: str = ""
+    IMAP_USE_SSL: bool = True
+    # Seconds to wait when polling IMAP for a reply during a test run
+    IMAP_REPLY_CHECK_TIMEOUT_SECONDS: int = 30
+
+    # ------------------------------------------------------------------
+    # Inbound email webhook (SendGrid / Mailgun / generic)
+    # ------------------------------------------------------------------
+    # Shared secret used to verify inbound webhook deliveries.
+    # SendGrid: set X-Webhook-Secret header to this value in the Inbound
+    #   Parse settings.
+    # Mailgun: set as your Mailgun webhook signing key; the handler verifies
+    #   the HMAC-SHA256 signature automatically.
+    # Generic: include the value in an X-Webhook-Secret request header.
+    # Leave empty to accept all requests (dev/test only).
+    INBOUND_EMAIL_WEBHOOK_SECRET: str = ""
+
+    # Maximum number of AI reply turns per conversation before it auto-closes.
+    # Prevents infinite back-and-forth loops.
+    EMAIL_CONVERSATION_MAX_TURNS: int = 10
+
     # LiveKit
     LIVEKIT_URL: str = "ws://localhost:7880"
     LIVEKIT_API_KEY: str = ""
@@ -304,7 +329,8 @@ class Settings(BaseSettings):
     # preflights are handled separately by checking the request method).
     RATE_LIMIT_EXEMPT_PATHS: str = (
         "/api/v1/health,/health,/,"
-        "/api/v1/telephony/webhooks,/docs,/openapi.json,/redoc,/favicon.ico"
+        "/api/v1/telephony/webhooks,/api/v1/inbound/email,"
+        "/docs,/openapi.json,/redoc,/favicon.ico"
     )
 
 

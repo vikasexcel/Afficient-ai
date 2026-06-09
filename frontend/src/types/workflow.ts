@@ -51,6 +51,9 @@ export interface EmailConfig {
 export interface CallConfig {
   playbook_id: string;
   retry_count: number;
+  /** Optional phone number override — when set, this number is dialled instead
+   * of the lead's phone. Used by the Email Reply → Call Follow-Up workflow. */
+  to_number?: string;
 }
 
 export interface WaitConfig {
@@ -59,7 +62,9 @@ export interface WaitConfig {
 }
 
 export interface ConditionConfig {
-  condition_type: "EMAIL_SENT" | "EMAIL_FAILED" | "CALL_COMPLETED" | "CALL_FAILED";
+  condition_type: "EMAIL_SENT" | "EMAIL_FAILED" | "EMAIL_REPLIED" | "NEGATIVE_REPLY" | "CALL_COMPLETED" | "CALL_FAILED";
+  /** For EMAIL_REPLIED / NEGATIVE_REPLY: minutes after send within which a reply counts as timely. */
+  window_minutes?: number;
 }
 
 export interface LinkedinConfig {
@@ -130,4 +135,34 @@ export interface NodeData extends Record<string, unknown> {
   type: string;
   label?: string;
   config?: NodeConfig;
+}
+
+// ---------------------------------------------------------------------------
+// Workflow test-run types
+// ---------------------------------------------------------------------------
+
+export interface WorkflowTestRequest {
+  test_email: string;
+  test_phone?: string;
+  skip_wait?: boolean;
+}
+
+export interface WorkflowTestLogEntry {
+  step: number;
+  node_id: string;
+  node_type: string;
+  node_label: string;
+  status: "running" | "completed" | "skipped" | "failed" | "condition_true" | "condition_false";
+  message: string;
+  output?: Record<string, unknown> | null;
+  timestamp: string;
+}
+
+export interface WorkflowTestResponse {
+  workflow_id: string;
+  test_email: string;
+  test_phone: string;
+  result: "completed" | "stopped" | "failed";
+  logs: WorkflowTestLogEntry[];
+  error?: string | null;
 }

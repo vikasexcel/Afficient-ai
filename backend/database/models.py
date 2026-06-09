@@ -10,3 +10,7 @@ from modules.ai.model import AICall, AITranscriptEntry, AICallSummary
 from modules.telephony.model import TelephonyCall, TelephonyEvent
 from modules.playbook.model import Playbook, PlaybookField, PlaybookVersion
 from modules.leads.model import Lead, LeadList, lead_list_memberships  # noqa: F401
+from modules.campaign.email_conversation_model import (  # noqa: F401
+    EmailConversation,
+    EmailMessage,
+)

@@ -378,6 +378,15 @@ class WorkflowService:
         # EMAIL node stores {"sent": True/False, ...}
         "EMAIL_SENT":     staticmethod(lambda o: bool(o.get("sent"))),
         "EMAIL_FAILED":   staticmethod(lambda o: not bool(o.get("sent"))),
+        # EMAIL_REPLIED: checks whether any reply was received, regardless of
+        # *when* it arrived.  The condition_handler sets "replied" = True via
+        # the inbound webhook path (instant) or IMAP fallback (polled).
+        # Previously this read "within_window" which silently dropped replies
+        # that arrived after the window expired — those are now TRUE branches.
+        "EMAIL_REPLIED":    staticmethod(lambda o: bool(o.get("replied"))),
+        # True when the reply body contains opt-out / negative phrases.
+        # Set by the inbound webhook handler or the IMAP fallback.
+        "NEGATIVE_REPLY":  staticmethod(lambda o: bool(o.get("negative_reply"))),
         # CALL node stores {"outcome": "completed"/"failed"/"running", ...}
         "CALL_COMPLETED": staticmethod(lambda o: o.get("outcome") == "completed"),
         "CALL_FAILED":    staticmethod(
@@ -396,8 +405,9 @@ class WorkflowService:
         Parameters
         ----------
         condition_type:
-            One of ``EMAIL_SENT``, ``EMAIL_FAILED``, ``CALL_COMPLETED``,
-            ``CALL_FAILED`` (case-insensitive).
+            One of ``EMAIL_SENT``, ``EMAIL_FAILED``, ``EMAIL_REPLIED``,
+            ``NEGATIVE_REPLY``,
+            ``CALL_COMPLETED``, ``CALL_FAILED`` (case-insensitive).
         source_output:
             ``execution.node_outputs[source_node_id]`` — the dict produced
             by the source node when it ran.

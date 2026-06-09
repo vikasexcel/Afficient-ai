@@ -63,6 +63,10 @@ class ExecutionService:
             current_node_id=current_node_id,
         )
         ExecutionRepository.create(db, execution)
+
+        # Write "lead entered workflow" activity for the audit trail.
+        ExecutionService._log_wf_activity(db, execution, "wf_start")
+
         return execution
 
     # ------------------------------------------------------------------ #
@@ -181,6 +185,46 @@ class ExecutionService:
             if execution.status not in ("completed", "failed", "exhausted"):
                 execution.status = "completed"
                 execution.retry_status = "completed"
+                ExecutionService._log_wf_activity(db, execution, "wf_done")
             db.flush()
 
         return execution
+
+    # ------------------------------------------------------------------ #
+    # Internal activity logging
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _log_wf_activity(
+        db: Session,
+        execution: Execution,
+        activity_type: str,
+        notes: str | None = None,
+    ) -> None:
+        """Write a LeadActivity row for workflow-level events (wf_start, wf_done)."""
+        import uuid as _uuid
+        from modules.leads.model import LeadActivity
+
+        ctx = execution.context or {}
+        lead_ctx = ctx.get("lead") or {}
+        lead_id_raw = (
+            execution.lead_id
+            or lead_ctx.get("id")
+        )
+        org_id_raw = ctx.get("org_id") or lead_ctx.get("organization_id")
+
+        if not lead_id_raw or not org_id_raw:
+            return
+        try:
+            lead_id = _uuid.UUID(str(lead_id_raw))
+            org_id = _uuid.UUID(str(org_id_raw))
+        except ValueError:
+            return
+
+        db.add(LeadActivity(
+            organization_id=org_id,
+            lead_id=lead_id,
+            activity_type=activity_type,
+            notes=notes,
+        ))
+        db.flush()

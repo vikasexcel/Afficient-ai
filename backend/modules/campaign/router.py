@@ -34,6 +34,9 @@ from modules.campaign.schema import (
     WorkflowGraphResponse,
     WorkflowGraphSchema,
     WorkflowRestoreResponse,
+    WorkflowTestLogEntry,
+    WorkflowTestRequest,
+    WorkflowTestResponse,
     WorkflowValidationResponse,
     WorkflowVersionDetail,
     WorkflowVersionListResponse,
@@ -592,6 +595,224 @@ async def validate_workflow(
         valid=not errors,
         errors=errors,
         warnings=warnings,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Workflow test runner
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{campaign_id}/workflow/test",
+    response_model=WorkflowTestResponse,
+    summary="Run a test execution of the workflow",
+)
+async def test_workflow(
+    campaign_id: uuid.UUID,
+    body: WorkflowTestRequest,
+    db: Session = Depends(get_db),
+    tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
+):
+    """Execute the campaign's workflow in test mode.
+
+    * Sends a real email to ``test_email``.
+    * Optionally skips WAIT node durations so the test finishes immediately.
+    * Checks for email replies via IMAP (when IMAP is configured).
+    * Places a real call to ``test_phone`` (or the CALL node's configured
+      ``to_number``) when telephony is enabled.
+    * Returns a step-by-step execution log for display in the UI.
+
+    The test run does **not** create an ``Execution`` database row — it is a
+    stateless dry-run that uses the live node handlers but bypasses the
+    scheduler and retry engine.
+    """
+    from datetime import datetime, timezone
+    from modules.campaign.workflow_service import WorkflowService
+    from modules.campaign.node_handlers.email_handler import EmailNodeHandler
+    from modules.campaign.node_handlers.call_handler import CallNodeHandler
+    from modules.campaign.node_handlers.wait_handler import WaitNodeHandler
+    from modules.campaign.node_handlers.condition_handler import ConditionNodeHandler
+    from modules.campaign.node_handlers.stop_handler import StopNodeHandler
+    from modules.campaign.node_handlers.linkedin_handler import LinkedInNodeHandler
+    from modules.campaign.execution_model import Execution
+
+    campaign = _load_campaign(db, _org_uuid(tenant), campaign_id)
+    wf = _load_active_workflow(db, campaign.id)
+
+    # Build a synthetic execution object (not persisted) that carries test
+    # context through the node handlers.
+    synthetic_execution = Execution(
+        workflow_id=wf.id,
+        status="running",
+        context={
+            "lead": {
+                "email": body.test_email,
+                "phone": body.test_phone or "",
+                "first_name": "Test",
+                "last_name": "User",
+                "name": "Test User",
+                "company": "Test Co",
+                "job_title": "Tester",
+            },
+            "campaign_id": str(campaign_id),
+        },
+        node_outputs={},
+    )
+
+    handlers = {
+        "EMAIL":     EmailNodeHandler(),
+        "CALL":      CallNodeHandler(),
+        "WAIT":      WaitNodeHandler(),
+        "CONDITION": ConditionNodeHandler(),
+        "STOP":      StopNodeHandler(),
+        "LINKEDIN":  LinkedInNodeHandler(),
+    }
+
+    logs: list[dict] = []
+    step = 0
+    result = "completed"
+    error: str | None = None
+
+    def _log(node: dict, status: str, message: str, output: dict | None = None):
+        nonlocal step
+        step += 1
+        logs.append({
+            "step": step,
+            "node_id": node.get("id", ""),
+            "node_type": node.get("type", ""),
+            "node_label": node.get("label") or node.get("type", ""),
+            "status": status,
+            "message": message,
+            "output": output,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+
+    try:
+        current_node = WorkflowService.get_entry_node(wf)
+    except ValueError as exc:
+        return WorkflowTestResponse(
+            workflow_id=str(wf.id),
+            test_email=body.test_email,
+            test_phone=body.test_phone,
+            result="failed",
+            logs=[],
+            error=str(exc),
+        )
+
+    visited: set[str] = set()
+    MAX_STEPS = 20  # guard against graph cycles during test
+
+    while current_node and len(visited) < MAX_STEPS:
+        node_id = current_node.get("id", "")
+        node_type = (current_node.get("type") or "").upper()
+
+        if node_id in visited:
+            _log(current_node, "failed", "Cycle detected — aborting test run")
+            result = "failed"
+            break
+        visited.add(node_id)
+
+        handler = handlers.get(node_type)
+        if handler is None:
+            _log(current_node, "failed", f"No handler for node type '{node_type}'")
+            result = "failed"
+            break
+
+        # ── WAIT: skip duration in test mode ────────────────────────────
+        if node_type == "WAIT" and body.skip_wait:
+            _log(current_node, "skipped",
+                 f"Wait node skipped in test mode "
+                 f"(would wait {current_node.get('duration', '?')} "
+                 f"{current_node.get('unit', 'minutes')})")
+            node_result_output: dict = {"skipped": True, "reason": "test_mode"}
+            synthetic_execution.node_outputs = {
+                **(synthetic_execution.node_outputs or {}),
+                node_id: node_result_output,
+            }
+            next_nodes = WorkflowService.get_next_nodes(wf, node_id)
+            current_node = next_nodes[0] if next_nodes else None
+            continue
+
+        # ── STOP: terminal ───────────────────────────────────────────────
+        if node_type == "STOP":
+            _log(current_node, "completed", "Workflow stopped at STOP node")
+            result = "stopped"
+            break
+
+        # ── Phone override for CALL node in test mode ────────────────────
+        if node_type == "CALL" and body.test_phone:
+            node_with_override = dict(current_node)
+            cfg = dict(node_with_override.get("config") or {})
+            if not cfg.get("to_number") and not node_with_override.get("to_number"):
+                node_with_override["to_number"] = body.test_phone
+            current_node = node_with_override
+
+        _log(current_node, "running", f"Executing {node_type} node…")
+
+        try:
+            node_result = await handler.execute(db, synthetic_execution, current_node)
+        except Exception as exc:
+            _log(current_node, "failed", f"Node raised an exception: {exc}")
+            result = "failed"
+            error = str(exc)
+            break
+
+        # Store node output for downstream condition evaluation.
+        if node_result.output:
+            synthetic_execution.node_outputs = {
+                **(synthetic_execution.node_outputs or {}),
+                node_id: node_result.output,
+            }
+
+        # Determine log status from outcome.
+        if node_type == "CONDITION":
+            cond_result = node_result.output.get("condition_result") if node_result.output else None
+            label = "condition_true" if cond_result else "condition_false"
+            ctype = node_result.output.get("condition_type", "") if node_result.output else ""
+            _log(current_node, label,
+                 f"Condition '{ctype}' evaluated → {'TRUE' if cond_result else 'FALSE'}",
+                 node_result.output)
+        elif node_type == "EMAIL":
+            sent = (node_result.output or {}).get("sent", False)
+            _log(current_node,
+                 "completed" if sent else "failed",
+                 (f"Email sent to {body.test_email}" if sent
+                  else f"Email failed: {(node_result.output or {}).get('error', 'unknown')}"),
+                 node_result.output)
+        elif node_type == "CALL":
+            phone = body.test_phone or current_node.get("to_number") or "lead phone"
+            _log(current_node,
+                 "completed" if node_result.advance else "running",
+                 (f"Call initiated to {phone}" if node_result.outcome != "failed"
+                  else f"Call failed: {(node_result.output or {}).get('error', 'unknown')}"),
+                 node_result.output)
+        else:
+            _log(current_node,
+                 node_result.outcome or "completed",
+                 f"{node_type} completed with outcome '{node_result.outcome}'",
+                 node_result.output)
+
+        if not node_result.advance:
+            # Non-advancing node (e.g. CALL in telephony mode waiting for webhook).
+            result = "completed"
+            break
+
+        # Follow next node.
+        if node_result.next_node_id:
+            node_map = {n["id"]: n for n in (wf.nodes or [])}
+            current_node = node_map.get(node_result.next_node_id)
+        else:
+            next_nodes = WorkflowService.get_next_nodes(wf, node_id)
+            current_node = next_nodes[0] if next_nodes else None
+
+    return WorkflowTestResponse(
+        workflow_id=str(wf.id),
+        test_email=body.test_email,
+        test_phone=body.test_phone,
+        result=result,
+        logs=[WorkflowTestLogEntry(**entry) for entry in logs],
+        error=error,
     )
 
 

@@ -16,6 +16,7 @@ interface WorkflowToolbarProps {
   validating: boolean;
   validation: ValidationState | null;
   hasUnsavedChanges: boolean;
+  readOnly?: boolean;
   onSave: () => void;
   onValidate: () => void;
   onOpenTemplates: () => void;
@@ -32,6 +33,7 @@ export default function WorkflowToolbar({
   validating,
   validation,
   hasUnsavedChanges,
+  readOnly = false,
   onSave,
   onValidate,
   onOpenTemplates,
@@ -50,7 +52,7 @@ export default function WorkflowToolbar({
         Workflow Builder
       </span>
 
-      {hasUnsavedChanges && (
+      {!readOnly && hasUnsavedChanges && (
         <span className="text-[10px] text-amber-400/70 font-medium ml-1">
           unsaved changes
         </span>
@@ -116,8 +118,9 @@ export default function WorkflowToolbar({
         <Button
           size="sm"
           onClick={onSave}
-          disabled={saving || validating}
-          className="bg-violet-600 hover:bg-violet-500 text-white text-[12px] h-7 px-3"
+          disabled={saving || validating || readOnly}
+          title={readOnly ? "Campaign is completed — workflow is read-only" : undefined}
+          className="bg-violet-600 hover:bg-violet-500 text-white text-[12px] h-7 px-3 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {saving ? (
             <Loader2 size={12} className="animate-spin mr-1" />

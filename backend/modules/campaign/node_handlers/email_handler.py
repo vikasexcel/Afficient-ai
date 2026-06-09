@@ -133,6 +133,19 @@ class EmailNodeHandler(BaseNodeHandler):
                 to=to_email,
                 subject=result.get("subject"),
             )
+            # Create the EmailConversation + first EmailMessage row so the
+            # inbound webhook can match this message_id to the right lead.
+            if result.get("message_id"):
+                _create_email_conversation(
+                    db=db,
+                    execution=execution,
+                    org_id=org_id,
+                    lead_id=lead_id,
+                    message_id=result["message_id"],
+                    subject=result.get("subject", ""),
+                    body=EmailService.render_template(body_template, lead),
+                    lead_email=to_email,
+                )
         else:
             log.warning(
                 "campaign.node.email.failed",
@@ -146,4 +159,62 @@ class EmailNodeHandler(BaseNodeHandler):
             outcome="completed" if result["sent"] else "failed",
             advance=True,
             output=result,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Module-level helper — separated from the handler class to keep it testable
+# ---------------------------------------------------------------------------
+
+
+def _create_email_conversation(
+    db,
+    *,
+    execution,
+    org_id: uuid.UUID | None,
+    lead_id: uuid.UUID | None,
+    message_id: str,
+    subject: str,
+    body: str,
+    lead_email: str,
+) -> None:
+    """Create the EmailConversation + first EmailMessage rows.
+
+    Called immediately after a successful SMTP send.  Silently skips when
+    ``org_id`` or ``lead_id`` is absent (ad-hoc / unit-test paths).
+    """
+    if org_id is None or lead_id is None:
+        return
+
+    try:
+        from modules.campaign.email_conversation_service import (
+            EmailConversationService,
+        )
+        from modules.campaign.model import Campaign
+        from modules.campaign.workflow_model import Workflow
+
+        campaign_id: uuid.UUID | None = None
+        try:
+            workflow = db.get(Workflow, execution.workflow_id)
+            if workflow is not None:
+                campaign_id = workflow.campaign_id
+        except Exception:
+            pass
+
+        EmailConversationService.create_from_sent_email(
+            db,
+            lead_id=lead_id,
+            organization_id=org_id,
+            execution_id=execution.id,
+            campaign_id=campaign_id,
+            message_id=message_id,
+            subject=subject,
+            body=body,
+            lead_email=lead_email,
+        )
+    except Exception as exc:
+        log.warning(
+            "campaign.node.email.conversation_create_failed",
+            execution_id=str(execution.id),
+            error=str(exc),
         )

@@ -547,6 +547,21 @@ class PlaybookService:
         return _detail(pb, fields)
 
     @staticmethod
+    def delete(
+        db: Session,
+        organization_id: uuid.UUID,
+        playbook_id: uuid.UUID,
+    ) -> None:
+        """Permanently delete a playbook and its fields (hard delete)."""
+        pb = PlaybookRepository.get(
+            db, playbook_id, organization_id=organization_id, with_fields=False
+        )
+        if pb is None:
+            raise PlaybookNotFoundError("Playbook not found")
+        db.delete(pb)
+        db.commit()
+
+    @staticmethod
     def duplicate(
         db: Session,
         organization_id: uuid.UUID,

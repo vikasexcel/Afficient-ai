@@ -2,6 +2,8 @@ import { api } from "./auth";
 import type {
   WorkflowGraph,
   WorkflowGraphResponse,
+  WorkflowTestRequest,
+  WorkflowTestResponse,
   WorkflowValidationResponse,
   WorkflowTemplate,
   WorkflowTemplateListResponse,
@@ -37,6 +39,21 @@ export async function validateWorkflow(
   const { data } = await api.post<WorkflowValidationResponse>(
     `/campaigns/${campaignId}/workflow/validate`,
     graph
+  );
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// Workflow test runner
+// ---------------------------------------------------------------------------
+
+export async function testWorkflow(
+  campaignId: string,
+  request: WorkflowTestRequest
+): Promise<WorkflowTestResponse> {
+  const { data } = await api.post<WorkflowTestResponse>(
+    `/campaigns/${campaignId}/workflow/test`,
+    request
   );
   return data;
 }

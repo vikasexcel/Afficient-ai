@@ -28,8 +28,9 @@ import {
 import NodeConfigDrawer from "@/components/workflow/config/NodeConfigDrawer";
 import TemplateSelector from "@/components/workflow/templates/TemplateSelector";
 import VersionHistoryDrawer from "@/components/workflow/versions/VersionHistoryDrawer";
+import WorkflowTestPanel from "@/components/workflow/WorkflowTestPanel";
 import type { NodeConfig, WorkflowTemplate, WorkflowRestoreResponse } from "@/types/workflow";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, FlaskConical } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -178,9 +179,11 @@ function WorkflowBuilderInner({ campaignId }: { campaignId: string }) {
   const [validating, setValidating] = useState(false);
   const [validation, setValidation] = useState<WorkflowValidationResponse | null>(null);
   const [campaignName, setCampaignName] = useState<string | undefined>();
+  const [campaignCompleted, setCampaignCompleted] = useState(false);
   const [selectedNode, setSelectedNode] = useState<Node<NodeData> | null>(null);
   const [templateSelectorOpen, setTemplateSelectorOpen] = useState(false);
   const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
+  const [testPanelOpen, setTestPanelOpen] = useState(false);
 
   // Track the last-saved snapshot to detect unsaved changes.
   const savedSnapshotRef = useRef<string>("");
@@ -195,9 +198,13 @@ function WorkflowBuilderInner({ campaignId }: { campaignId: string }) {
     async function load() {
       setLoading(true);
       try {
-        // Fetch campaign name (best-effort, non-blocking).
+        // Fetch campaign metadata (best-effort, non-blocking).
         getCampaign(campaignId)
-          .then((c) => { if (!cancelled) setCampaignName(c.name); })
+          .then((c) => {
+            if (cancelled) return;
+            setCampaignName(c.name);
+            if (c.status === "completed") setCampaignCompleted(true);
+          })
           .catch(() => {});
 
         // Fetch workflow (404 → empty canvas is fine).
@@ -234,7 +241,7 @@ function WorkflowBuilderInner({ campaignId }: { campaignId: string }) {
 
   // ── Save ───────────────────────────────────────────────────────────────────
   const handleSave = useCallback(async () => {
-    if (saving) return;
+    if (saving || campaignCompleted) return;
     setSaving(true);
     try {
       const { nodes: bNodes, edges: bEdges } = flowToBackend(nodes, edges);
@@ -244,12 +251,25 @@ function WorkflowBuilderInner({ campaignId }: { campaignId: string }) {
       });
       savedSnapshotRef.current = JSON.stringify({ nodes, edges });
       toast.success("Workflow saved");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Save failed");
+    } catch (err: unknown) {
+      const axiosDetail =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data
+          ?.detail;
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (status === 409) {
+        setCampaignCompleted(true);
+        toast.error(
+          axiosDetail ?? "This campaign is completed and its workflow cannot be edited."
+        );
+      } else {
+        toast.error(
+          axiosDetail ?? (err instanceof Error ? err.message : "Save failed")
+        );
+      }
     } finally {
       setSaving(false);
     }
-  }, [campaignId, nodes, edges, saving]);
+  }, [campaignId, nodes, edges, saving, campaignCompleted]);
 
   // ── Validate ───────────────────────────────────────────────────────────────
   const handleValidate = useCallback(async () => {
@@ -413,12 +433,36 @@ function WorkflowBuilderInner({ campaignId }: { campaignId: string }) {
           validating={validating}
           validation={validation}
           hasUnsavedChanges={hasUnsavedChanges}
+          readOnly={campaignCompleted}
           onSave={handleSave}
           onValidate={handleValidate}
           onOpenTemplates={() => setTemplateSelectorOpen(true)}
           onOpenHistory={() => setHistoryDrawerOpen(true)}
         />
+
+        {/* Test workflow button */}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setTestPanelOpen((v) => !v)}
+          className={`h-7 px-2.5 gap-1.5 text-[12px] ml-auto ${
+            testPanelOpen
+              ? "text-indigo-400 bg-indigo-500/10 hover:bg-indigo-500/15"
+              : "text-white/50 hover:text-white"
+          }`}
+        >
+          <FlaskConical size={13} />
+          Test
+        </Button>
       </div>
+
+      {/* Completed-campaign read-only banner */}
+      {campaignCompleted && (
+        <div className="flex items-center gap-2 px-4 py-2 bg-amber-500/10 border-b border-amber-500/20 text-amber-400 text-xs shrink-0">
+          <span className="font-medium">Read-only:</span>
+          <span>This campaign is completed. Workflow editing is disabled.</span>
+        </div>
+      )}
 
       {/* Validation error panel */}
       {validation && (validation.errors.length > 0 || validation.warnings.length > 0) && (
@@ -428,7 +472,7 @@ function WorkflowBuilderInner({ campaignId }: { campaignId: string }) {
         />
       )}
 
-      {/* Main content: sidebar + canvas + config panel */}
+      {/* Main content: sidebar + canvas + config panel + test panel */}
       <div className="flex flex-1 overflow-hidden">
         <WorkflowSidebar />
         <WorkflowCanvas
@@ -445,11 +489,17 @@ function WorkflowBuilderInner({ campaignId }: { campaignId: string }) {
           onOpenTemplates={() => setTemplateSelectorOpen(true)}
           isLoading={loading}
         />
-        {selectedNode && (
+        {selectedNode && !testPanelOpen && (
           <NodeConfigDrawer
             node={selectedNode}
             onClose={() => setSelectedNode(null)}
             onConfigChange={onNodeConfigChange}
+          />
+        )}
+        {testPanelOpen && (
+          <WorkflowTestPanel
+            campaignId={campaignId}
+            onClose={() => setTestPanelOpen(false)}
           />
         )}
       </div>

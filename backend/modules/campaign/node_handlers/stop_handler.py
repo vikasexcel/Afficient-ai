@@ -34,6 +34,15 @@ class StopNodeHandler(BaseNodeHandler):
         execution.retry_status = "completed"
         db.flush()
 
+        # Record "workflow completed" on the lead timeline. A STOP node ends
+        # the run loop with ``advance=False`` so ``advance_execution`` (which
+        # logs wf_done for graphs that terminate by running out of edges) is
+        # never reached — emit the activity here so STOP-terminated workflows
+        # are tracked consistently.
+        from modules.campaign.execution_service import ExecutionService
+
+        ExecutionService._log_wf_activity(db, execution, "wf_done")
+
         log.info(
             "campaign.node.stop",
             execution_id=str(execution.id),

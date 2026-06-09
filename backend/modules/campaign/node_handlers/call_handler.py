@@ -19,6 +19,12 @@ Non-telephony (LLM planning stub)
     ``process_outcome`` is intentionally NOT called — the graph framework
     (STOP node or future Condition node) decides when the execution is
     terminal.
+
+Phone number override (``to_number``)
+    When the CALL node config contains a ``to_number`` field (e.g.
+    ``+917541006707``) that number is dialled instead of the lead's
+    phone number stored in the execution context.  This is used by the
+    "Email Reply → Call Follow-Up" workflow and other targeted call nodes.
 """
 
 from __future__ import annotations
@@ -54,6 +60,33 @@ class CallNodeHandler(BaseNodeHandler):
             _is_dial_candidate,
         )
 
+        node_id: str = node.get("id", "")
+
+        # ------------------------------------------------------------------ #
+        # Phone-number override: when the node config has a ``to_number``
+        # field, patch the execution context so the dial logic uses that
+        # number instead of whatever is stored for the lead.
+        # ------------------------------------------------------------------ #
+        _cfg = node.get("config") or {}
+        to_number: str = (
+            _cfg.get("to_number")
+            or node.get("to_number")
+            or ""
+        ).strip()
+
+        if to_number:
+            ctx = dict(execution.context or {})
+            lead = dict(ctx.get("lead") or {})
+            lead["phone"] = to_number
+            ctx["lead"] = lead
+            execution.context = ctx
+            log.info(
+                "campaign.node.call.phone_override",
+                execution_id=str(execution.id),
+                node_id=node.get("id"),
+                to_number=to_number,
+            )
+
         # ------------------------------------------------------------------ #
         # Telephony path — place a real outbound call.
         # Mirrors the logic in worker.run_execution but without falling back
@@ -63,6 +96,7 @@ class CallNodeHandler(BaseNodeHandler):
             settings.CAMPAIGN_TELEPHONY_DIALING_ENABLED
             and _is_dial_candidate(execution)
         ):
+            self._log_call_activity(db, execution, node_id, activity="init")
             await _dial_execution(db, execution)
 
             if execution.status == "running":
@@ -74,6 +108,8 @@ class CallNodeHandler(BaseNodeHandler):
                 )
 
             # Dial failed — _fail_dial / process_outcome already handled it.
+            self._log_call_activity(db, execution, node_id, activity="fail",
+                                    notes=execution.last_failure_reason)
             return NodeResult(
                 outcome="failed",
                 advance=False,
@@ -137,6 +173,7 @@ class CallNodeHandler(BaseNodeHandler):
                 tokens=result.stats.total_tokens,
             )
 
+            self._log_call_activity(db, execution, node_id, activity="done")
             # Leave execution "running"; graph executor advances to next node.
             return NodeResult(
                 outcome="completed",
@@ -154,8 +191,58 @@ class CallNodeHandler(BaseNodeHandler):
             execution.status = "failed"
             execution.last_failure_reason = str(exc)
             db.flush()
+            self._log_call_activity(db, execution, node_id, activity="fail",
+                                    notes=str(exc))
             return NodeResult(
                 outcome="failed",
                 advance=False,
                 output={"outcome": "failed", "error": str(exc)},
             )
+
+    # ------------------------------------------------------------------ #
+    # Activity logging
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _log_call_activity(
+        db: "Session",
+        execution: "Execution",
+        node_id: str,
+        activity: str,  # "init" | "done" | "fail"
+        notes: str | None = None,
+    ) -> None:
+        import uuid
+        from modules.leads.model import (
+            LeadActivity,
+            ACTIVITY_CALL_INIT,
+            ACTIVITY_CALL_COMPLETED,
+            ACTIVITY_CALL_FAILED,
+        )
+
+        type_map = {
+            "init": ACTIVITY_CALL_INIT,
+            "done": ACTIVITY_CALL_COMPLETED,
+            "fail": ACTIVITY_CALL_FAILED,
+        }
+        activity_type = type_map.get(activity, ACTIVITY_CALL_INIT)
+
+        ctx = execution.context or {}
+        lead_ctx = ctx.get("lead") or {}
+        lead_id_raw = lead_ctx.get("id")
+        org_id_raw = ctx.get("org_id") or lead_ctx.get("organization_id")
+
+        if not lead_id_raw or not org_id_raw:
+            return
+        try:
+            lead_id = uuid.UUID(str(lead_id_raw))
+            org_id = uuid.UUID(str(org_id_raw))
+        except ValueError:
+            return
+
+        db.add(LeadActivity(
+            organization_id=org_id,
+            lead_id=lead_id,
+            activity_type=activity_type,
+            notes=notes,
+        ))
+        db.flush()

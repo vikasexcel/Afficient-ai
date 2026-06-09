@@ -199,6 +199,18 @@ ACTIVITY_LI_CONNECT = "li_connect"   # connection request sent
 ACTIVITY_LI_MESSAGE = "li_message"   # direct message sent
 ACTIVITY_LI_FAILED  = "li_failed"    # any LinkedIn action failure
 
+# Call activity types
+ACTIVITY_CALL_INIT      = "call_init"    # call placed / dialling
+ACTIVITY_CALL_COMPLETED = "call_done"    # call completed successfully
+ACTIVITY_CALL_FAILED    = "call_fail"    # call failed
+
+# Workflow-level activity types
+ACTIVITY_WF_STARTED     = "wf_start"    # lead entered workflow
+ACTIVITY_WF_COMPLETED   = "wf_done"     # lead reached STOP node
+ACTIVITY_REPLY_RECEIVED = "reply_recv"  # email reply detected
+ACTIVITY_REPLY_NEGATIVE = "reply_neg"   # negative / opt-out reply detected
+ACTIVITY_COND_EVAL      = "cond_eval"   # condition node evaluated
+
 
 # ---------------------------------------------------------------------------
 # LeadActivity

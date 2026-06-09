@@ -27,6 +27,7 @@ from modules.leads.router import router as leads_router
 from modules.tts.router import router as tts_router
 from modules.campaign.template_router import router as workflow_templates_router
 from modules.analytics.router import router as analytics_router
+from modules.campaign.inbound_email_router import router as inbound_email_router
 
 
 @asynccontextmanager
@@ -141,6 +142,7 @@ for r in (
     lead_lists_router,
     workflow_templates_router,
     analytics_router,
+    inbound_email_router,
 ):
     app.include_router(r, prefix=settings.API_PREFIX)
 
