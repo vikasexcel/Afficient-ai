@@ -30,6 +30,7 @@ from database.session import SessionLocal
 from modules.campaign.execution_model import Execution
 from modules.campaign.model import Campaign
 from modules.campaign.workflow_model import Workflow
+from modules.livekit.service import SipDialResult
 from modules.livekit.exceptions import LiveKitError
 from modules.telephony.exceptions import TwilioProviderError
 from modules.telephony.model import TelephonyCall
@@ -299,6 +300,53 @@ async def test_launch_places_real_livekit_sip_call(
         db.close()
 
 
+async def test_livekit_sip_infra_failure_falls_back_to_twilio(
+    unique_user, monkeypatch
+):
+    svc = _fake_service()
+    monkeypatch.setattr(
+        "modules.telephony.service.settings.LIVEKIT_SIP_OUTBOUND_TRUNK_ID",
+        "ST_test_trunk",
+    )
+
+    async def _sip_not_connected(**_kwargs):
+        return SipDialResult(
+            answered=False,
+            identity="sip-caller",
+            sip_status_code=500,
+            error=(
+                "TwirpError(code=internal, message=twirp error unknown: "
+                "sip not connected (redis required), status=500)"
+            ),
+        )
+
+    svc._livekit.create_sip_participant = _sip_not_connected
+
+    row = await svc.initiate_outbound(
+        to_number="+14155550199",
+        organization_id=uuid.UUID(unique_user["organization_id"]),
+        created_by=None,
+        lead_name="Fallback Test",
+        lead_phone="+14155550199",
+    )
+
+    await asyncio.sleep(0.1)
+
+    assert svc._twilio.calls_created, "expected Twilio fallback origination"
+
+    db = SessionLocal()
+    try:
+        call = db.get(TelephonyCall, row.id)
+        assert call is not None
+        assert call.call_sid and call.call_sid.startswith("CA")
+        assert call.status == "queued"
+        assert (call.extra or {}).get("dial_mode") == "twilio_fallback"
+        assert call.error_code is None
+        assert call.error_message is None
+    finally:
+        db.close()
+
+
 # --------------------------------------------------------------------------- #
 # Dial-failure handling — NO silent LLM fallback
 # --------------------------------------------------------------------------- #
@@ -368,6 +416,129 @@ def _enable_dialing(monkeypatch):
         "modules.campaign.worker.settings.CAMPAIGN_TELEPHONY_DIALING_ENABLED",
         True,
     )
+
+
+class _FakeHttpResponse:
+    def __init__(self, body: dict) -> None:
+        self._body = body
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict:
+        return self._body
+
+
+async def test_email_reply_call_uses_call_node_playbook_and_http_dispatch(
+    client, unique_user, monkeypatch
+):
+    """Regression: wizard campaigns can store playbook only on the CALL node."""
+
+    headers = {"Authorization": f"Bearer {unique_user['access_token']}"}
+    playbook_id = _seed_playbook(client, headers)
+
+    nodes = [
+        {
+            "id": "cond_1",
+            "type": "CONDITION",
+            "condition_type": "EMAIL_REPLIED",
+            "source_node": "email_1",
+        },
+        {
+            "id": "call_1",
+            "type": "CALL",
+            "config": {
+                "playbook_id": playbook_id,
+                "to_number": "+917541006707",
+            },
+        },
+    ]
+    edges = [
+        {
+            "id": "e1",
+            "source": "cond_1",
+            "target": "call_1",
+            "condition": "TRUE",
+        },
+    ]
+
+    db = SessionLocal()
+    try:
+        campaign = Campaign(
+            organization_id=uuid.UUID(unique_user["organization_id"]),
+            name=f"Reply Call {uuid.uuid4().hex[:6]}",
+            status="active",
+            playbook_id=None,
+        )
+        db.add(campaign)
+        db.flush()
+        workflow = Workflow(
+            campaign_id=campaign.id,
+            state="active",
+            nodes=nodes,
+            edges=edges,
+        )
+        db.add(workflow)
+        db.flush()
+        execution = Execution(
+            workflow_id=workflow.id,
+            status="queued",
+            current_node_id="cond_1",
+            node_outputs={
+                "email_1": {
+                    "sent": True,
+                    "message_id": "<reply-call@example.com>",
+                    "replied": True,
+                    "match_method": "webhook",
+                }
+            },
+            context={
+                "campaign_id": str(campaign.id),
+                "playbook_id": str(campaign.playbook_id),
+                "lead": {
+                    "id": str(uuid.uuid4()),
+                    "name": "Ada Lovelace",
+                    "phone": "+14155550199",
+                    "email": "ada@example.com",
+                },
+            },
+        )
+        db.add(execution)
+        db.commit()
+        execution_id = execution.id
+    finally:
+        db.close()
+
+    captured: dict = {}
+
+    def _fake_post(url, *, json, headers, timeout):
+        captured["url"] = url
+        captured["json"] = json
+        captured["headers"] = headers
+        captured["timeout"] = timeout
+        return _FakeHttpResponse(
+            {
+                "id": str(uuid.uuid4()),
+                "call_sid": None,
+                "room_name": "test-room",
+                "status": "initiated",
+            }
+        )
+
+    _enable_dialing(monkeypatch)
+    monkeypatch.setattr(
+        "modules.campaign.worker.settings.CAMPAIGN_DISPATCH_VIA_HTTP",
+        True,
+    )
+    monkeypatch.setattr("modules.campaign.worker.httpx.post", _fake_post)
+
+    execution = await _run_worker(execution_id)
+
+    assert execution.status == "running"
+    assert captured["json"]["to_number"] == "+917541006707"
+    assert captured["json"]["playbook_id"] == playbook_id
+    assert captured["json"]["execution_id"] == str(execution_id)
+    assert (execution.context or {}).get("telephony_call_id")
 
 
 async def test_dial_telephony_unavailable_fails_execution(

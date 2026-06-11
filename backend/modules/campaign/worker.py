@@ -72,13 +72,40 @@ def _is_dial_candidate(execution: Execution) -> bool:
     return bool(ctx.get("lead"))
 
 
-def _campaign_dial_context(db, execution: Execution) -> dict | None:
+def _call_node_config(node: dict | None) -> dict:
+    if not node:
+        return {}
+    cfg = node.get("config") or {}
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def _call_node_value(node: dict | None, key: str) -> str:
+    if not node:
+        return ""
+    cfg = _call_node_config(node)
+    return str(cfg.get(key) or node.get(key) or "").strip()
+
+
+def _uuid_or_none(value) -> uuid.UUID | None:
+    if not value:
+        return None
+    try:
+        return uuid.UUID(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _campaign_dial_context(
+    db,
+    execution: Execution,
+    node: dict | None = None,
+) -> dict | None:
     """Resolve everything needed to place a real outbound call for a lead.
 
-    Returns ``None`` when the execution can't be dialled (no lead phone, no
-    playbook, or no owning campaign/org). For a dial candidate this is a
-    *dialing failure* (not a reason to silently run the LLM plan) — the caller
-    marks the execution failed via the retry engine.
+    Returns ``None`` when the execution can't be dialled (no phone, no
+    playbook, or no owning campaign/org).  Graph CALL nodes may carry a
+    ``to_number`` override and ``playbook_id`` in their config; those are used
+    when the campaign-level fields are absent.
     """
 
     from modules.campaign.model import Campaign
@@ -86,7 +113,7 @@ def _campaign_dial_context(db, execution: Execution) -> dict | None:
 
     ctx = execution.context or {}
     lead = ctx.get("lead") or {}
-    phone = (lead.get("phone") or "").strip()
+    phone = _call_node_value(node, "to_number") or (lead.get("phone") or "").strip()
     if not phone:
         return None
 
@@ -94,7 +121,12 @@ def _campaign_dial_context(db, execution: Execution) -> dict | None:
     if workflow is None:
         return None
     campaign = db.get(Campaign, workflow.campaign_id)
-    if campaign is None or not campaign.playbook_id:
+    if campaign is None:
+        return None
+    playbook_id = campaign.playbook_id or _uuid_or_none(
+        _call_node_value(node, "playbook_id")
+    )
+    if not playbook_id:
         return None
 
     # ``Campaign`` has no ``created_by`` column (only ``organization_id``); the
@@ -105,9 +137,9 @@ def _campaign_dial_context(db, execution: Execution) -> dict | None:
         "organization_id": campaign.organization_id,
         "created_by": None,
         "campaign_id": campaign.id,
-        "playbook_id": campaign.playbook_id,
+        "playbook_id": playbook_id,
         "lead_id": (
-            uuid.UUID(lead["id"]) if lead.get("id") else None
+            _uuid_or_none(lead.get("id"))
         ),
         "lead_name": lead.get("name"),
         "lead_phone": phone,
@@ -138,7 +170,11 @@ def _fail_dial(
     )
 
 
-async def _dial_execution(db, execution: Execution) -> None:
+async def _dial_execution(
+    db,
+    execution: Execution,
+    node: dict | None = None,
+) -> None:
     """Place a real outbound telephony call for a lead execution.
 
     Owns the full outcome of the dial attempt and NEVER falls back to the LLM
@@ -153,7 +189,7 @@ async def _dial_execution(db, execution: Execution) -> None:
       logged.
     """
 
-    dial = _campaign_dial_context(db, execution)
+    dial = _campaign_dial_context(db, execution, node=node)
     if dial is None:
         reason = "missing lead phone / playbook / campaign"
         log.warning(
@@ -263,7 +299,11 @@ def _build_dial_payload(dial: dict, execution: Execution) -> dict:
     }
 
 
-def _dispatch_dial_http(db, execution: Execution) -> None:
+def _dispatch_dial_http(
+    db,
+    execution: Execution,
+    node: dict | None = None,
+) -> None:
     """Originate a lead call by handing off to the FastAPI process.
 
     This is the production dial path. It runs **synchronously** in the Celery
@@ -280,7 +320,7 @@ def _dispatch_dial_http(db, execution: Execution) -> None:
       engine (retry scheduled when configured). NEVER falls back to the LLM.
     """
 
-    dial = _campaign_dial_context(db, execution)
+    dial = _campaign_dial_context(db, execution, node=node)
     if dial is None:
         reason = "missing lead phone / playbook / campaign"
         log.warning(
@@ -429,6 +469,15 @@ async def _run_graph_execution(db, execution: Execution, workflow) -> Execution:
             node_type=node_type,
         )
 
+        if (
+            node_type == "CALL"
+            and settings.CAMPAIGN_TELEPHONY_DIALING_ENABLED
+            and _is_dial_candidate(execution)
+            and settings.CAMPAIGN_DISPATCH_VIA_HTTP
+        ):
+            _dispatch_dial_http(db, execution, node=node)
+            return execution
+
         result = await handler_class().execute(db, execution, node)
 
         if result.output:
@@ -494,7 +543,7 @@ def _dispatch_graph_execution(db, execution: Execution, workflow) -> None:
         and _is_dial_candidate(execution)
         and settings.CAMPAIGN_DISPATCH_VIA_HTTP
     ):
-        _dispatch_dial_http(db, execution)
+        _dispatch_dial_http(db, execution, node=node)
         return
 
     asyncio.run(_run_graph_execution(db, execution, workflow))

@@ -89,6 +89,28 @@ function clearDraft() {
   }
 }
 
+function inferCampaignPlaybookId(nodes: unknown[]): string | null {
+  for (const node of nodes) {
+    if (!node || typeof node !== "object") continue;
+    const record = node as Record<string, unknown>;
+    if (record.type !== "CALL") continue;
+
+    const config = record.config;
+    if (config && typeof config === "object") {
+      const playbookId = (config as Record<string, unknown>).playbook_id;
+      if (typeof playbookId === "string" && playbookId.trim()) {
+        return playbookId;
+      }
+    }
+
+    const playbookId = record.playbook_id;
+    if (typeof playbookId === "string" && playbookId.trim()) {
+      return playbookId;
+    }
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Progress indicator
 // ---------------------------------------------------------------------------
@@ -174,7 +196,7 @@ export default function CampaignWizard({ onClose, onCreated }: Props) {
       // 1. Create campaign (always as draft first so we can attach the workflow)
       const campaignPayload = {
         name: draft.name.trim(),
-        playbook_id: null,
+        playbook_id: inferCampaignPlaybookId(draft.workflow_nodes),
         lead_list_id: draft.lead_list_id,
         schedule: {
           start_immediately: draft.start_immediately,

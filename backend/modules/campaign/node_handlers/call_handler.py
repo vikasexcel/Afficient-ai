@@ -97,7 +97,7 @@ class CallNodeHandler(BaseNodeHandler):
             and _is_dial_candidate(execution)
         ):
             self._log_call_activity(db, execution, node_id, activity="init")
-            await _dial_execution(db, execution)
+            await _dial_execution(db, execution, node=node)
 
             if execution.status == "running":
                 # Dial placed; Twilio webhook will reconcile the final outcome.

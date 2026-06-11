@@ -584,6 +584,29 @@ class TelephonyService:
             return
 
         if not result.answered:
+            if _should_fallback_livekit_sip_to_twilio(
+                result.sip_status_code,
+                result.error,
+            ):
+                try:
+                    await self._fallback_livekit_sip_to_twilio(
+                        telephony_call_id=telephony_call_id,
+                        room_name=room_name,
+                        to_number=to_number,
+                        organization_id=organization_id,
+                        sip_status_code=result.sip_status_code,
+                        sip_error=result.error,
+                    )
+                    return
+                except TelephonyError as exc:
+                    log.warning(
+                        "telephony.livekit_sip.fallback_twilio_failed",
+                        call_id=str(telephony_call_id),
+                        room=room_name,
+                        to=to_number,
+                        error=exc.message,
+                    )
+
             status, code = _sip_status_to_call_status(result.sip_status_code)
             await asyncio.to_thread(
                 self._apply_status_update,
@@ -674,6 +697,81 @@ class TelephonyService:
             call_id=str(telephony_call_id),
             room=room_name,
             duration_seconds=duration,
+        )
+
+    async def _fallback_livekit_sip_to_twilio(
+        self,
+        *,
+        telephony_call_id: uuid.UUID,
+        room_name: str,
+        to_number: str,
+        organization_id: uuid.UUID | None,
+        sip_status_code: int | None,
+        sip_error: str | None,
+    ) -> None:
+        """Originate via Twilio when LiveKit SIP infrastructure is unavailable."""
+
+        log.warning(
+            "telephony.livekit_sip.fallback_twilio",
+            call_id=str(telephony_call_id),
+            room=room_name,
+            to=to_number,
+            sip_status=sip_status_code,
+            sip_error=sip_error,
+        )
+        await self._record_event(
+            event_type="livekit_sip_fallback_twilio",
+            telephony_call_id=telephony_call_id,
+            organization_id=organization_id,
+            source="internal",
+            payload={
+                "sip_status_code": sip_status_code,
+                "sip_error": sip_error,
+            },
+        )
+
+        originated = await self._twilio.create_call(
+            to_number=to_number,
+            room_name=room_name,
+        )
+        await asyncio.to_thread(
+            self._set_sid,
+            telephony_call_id=telephony_call_id,
+            call_sid=originated.sid,
+            status=_TWILIO_STATUS_MAP.get(
+                (originated.status or "").lower(),
+                CALL_STATUS_INITIATED,
+            ),
+        )
+        await asyncio.to_thread(
+            self._apply_status_update,
+            telephony_call_id=telephony_call_id,
+            status=_TWILIO_STATUS_MAP.get(
+                (originated.status or "").lower(),
+                CALL_STATUS_INITIATED,
+            ),
+            error_code=None,
+            error_message=None,
+            extra_merge={"dial_mode": "twilio_fallback"},
+        )
+        await self._record_event(
+            event_type="originated",
+            call_sid=originated.sid,
+            telephony_call_id=telephony_call_id,
+            organization_id=organization_id,
+            source="twilio",
+            payload={
+                "fallback_from": "livekit_sip",
+                "twilio_status": originated.status,
+                "to": originated.to,
+                "from": originated.from_,
+            },
+        )
+        log.info(
+            "telephony.livekit_sip.fallback_twilio_originated",
+            call_id=str(telephony_call_id),
+            call_sid=originated.sid,
+            room=room_name,
         )
 
     async def _await_call_end(
@@ -1885,6 +1983,18 @@ def _sip_status_to_call_status(code: int | None) -> tuple[str, str | None]:
     if code == 404:  # Not Found
         return CALL_STATUS_FAILED, "404"
     return CALL_STATUS_FAILED, str(code)
+
+
+def _should_fallback_livekit_sip_to_twilio(
+    code: int | None,
+    error: str | None,
+) -> bool:
+    """Return True for LiveKit SIP infra failures, not callee outcomes."""
+
+    text = (error or "").lower()
+    if "redis required" in text or "sip not connected" in text:
+        return True
+    return code in (500, 503) and "twirp" in text
 
 
 def _parse_int(v: Any) -> int | None:

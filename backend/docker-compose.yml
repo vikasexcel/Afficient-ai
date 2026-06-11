@@ -41,9 +41,9 @@ services:
     environment:
       LIVEKIT_KEYS: "${LIVEKIT_API_KEY:-devkey}: ${LIVEKIT_API_SECRET:-secret_change_me_at_least_32_chars_long}"
     ports:
-      - "7880:7880"
-      - "7881:7881"
-      - "7882:7882/udp"
+      - "127.0.0.1:7880:7880"
+      - "127.0.0.1:7881:7881"
+      - "127.0.0.1:7882:7882/udp"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7880"]
       interval: 10s
