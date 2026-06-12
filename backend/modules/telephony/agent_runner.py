@@ -139,6 +139,24 @@ class CallAgentRunner:
                     error=exc.message,
                 )
 
+        # Build BookingHandler if the calendar module is configured.
+        booking_handler = None
+        try:
+            from modules.ai.booking_handler import BookingHandler
+            from modules.ai.booking_state import BookingMemory
+            from modules.calendar.dependencies import get_calendar_service
+
+            booking_handler = BookingHandler(
+                calendar_svc=get_calendar_service(),
+                booking_memory=BookingMemory(),
+                openai_client=ai.openai,
+            )
+        except Exception as _bh_exc:
+            log.debug(
+                "telephony.agent_runner.booking_handler_unavailable",
+                reason=str(_bh_exc),
+            )
+
         self._orch = ConversationOrchestrator(
             ai=ai,
             stt_streamer=stt_streamer,
@@ -159,6 +177,7 @@ class CallAgentRunner:
             idle_timeout_seconds=self.idle_timeout_seconds,
             wait_for_human_seconds=self.wait_for_human_seconds,
             is_phone_call=True,
+            booking_handler=booking_handler,
         )
 
         try:

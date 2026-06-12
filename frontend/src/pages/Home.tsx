@@ -232,7 +232,7 @@ export default function Home() {
           className="text-[12px] text-white/20 tracking-widest"
           style={{ fontFamily: "'DM Mono', monospace" }}
         >
-          AIFFICIENT © 2026
+          TELLAIGENT © 2026
         </span>
         <div className="flex flex-wrap gap-4 sm:gap-6">
           {["Privacy", "Terms", "Docs"].map((l) => (

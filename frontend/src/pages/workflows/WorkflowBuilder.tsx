@@ -311,7 +311,16 @@ function WorkflowBuilderInner({ campaignId }: { campaignId: string }) {
       setNodes((nds) =>
         nds.map((n) => {
           if (n.id !== nodeId) return n;
-          const updated = { ...n, data: { ...n.data, config } };
+          // For WAIT nodes, sync the label so the node card stays accurate.
+          const waitConfig = config as import("@/types/workflow").WaitConfig;
+          const updatedData =
+            n.type === "WAIT"
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              ? { ...(n as any).data, label: `Wait ${waitConfig.duration} ${waitConfig.unit}`, config }
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              : { ...(n as any).data, config };
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const updated = { ...n, data: updatedData } as any;
           // Keep selectedNode in sync so the drawer reflects live changes.
           setSelectedNode(updated);
           return updated;

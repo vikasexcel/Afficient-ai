@@ -82,7 +82,7 @@ export default function CompanyIntroduction({
           onChange={(e) =>
             onChange({ company_name: e.target.value || null })
           }
-          placeholder="Aifficient"
+          placeholder="Tellaigent"
         />
         <CharCount
           value={detail.company_name ?? ""}

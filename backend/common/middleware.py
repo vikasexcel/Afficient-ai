@@ -102,11 +102,20 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
         traceback=traceback.format_exc(),
     )
 
+    # Include CORS headers on 500 so browser devtools show the real error
+    # instead of a misleading "No Access-Control-Allow-Origin" message.
+    origin = request.headers.get("origin", "")
+    headers: dict[str, str] = {REQUEST_ID_HEADER: request_id}
+    if origin:
+        headers["access-control-allow-origin"] = origin
+        headers["access-control-allow-credentials"] = "true"
+        headers["vary"] = "Origin"
+
     return JSONResponse(
         status_code=500,
         content={
             "detail": "Internal server error",
             "request_id": request_id,
         },
-        headers={REQUEST_ID_HEADER: request_id},
+        headers=headers,
     )

@@ -66,6 +66,7 @@ from modules.ai.meeting import (
     MEETING_STATUS_UNKNOWN,
     detect_status as detect_meeting_status,
 )
+from modules.ai.booking_handler import BookingHandler
 from modules.ai.qualification import QualificationFramework
 from modules.ai.recovery import (
     HealthRegistry,
@@ -177,6 +178,7 @@ class ConversationOrchestrator:
         publish_metrics: bool = True,
         wait_for_human_seconds: float = 0.0,
         is_phone_call: bool = False,
+        booking_handler: BookingHandler | None = None,
     ) -> None:
         self._ai = ai
         self._stt_streamer = stt_streamer
@@ -208,6 +210,7 @@ class ConversationOrchestrator:
         # echo / line noise can't cut the agent off mid-utterance. Browser
         # test rooms leave this False and keep full barge-in behaviour.
         self._is_phone_call = is_phone_call
+        self._booking_handler = booking_handler
         # When > 0, the orchestrator waits this long for the human caller
         # to actually join the LiveKit room before speaking the opening
         # line. Critical for outbound calls: the agent joins the room at
@@ -372,7 +375,24 @@ class ConversationOrchestrator:
                 )
                 try:
                     yield self
-                    await loop_task
+                    # Wait for the event loop to finish OR the stop signal —
+                    # whichever comes first.  Without this guard, a dead STT
+                    # reconnect loop can block `await loop_task` forever and
+                    # prevent the `finally:` cancel from ever running.
+                    stop_waiter: asyncio.Task[None] = asyncio.ensure_future(
+                        self._stop.wait()
+                    )
+                    try:
+                        await asyncio.wait(
+                            [loop_task, stop_waiter],
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                    finally:
+                        stop_waiter.cancel()
+                        try:
+                            await stop_waiter
+                        except (asyncio.CancelledError, Exception):
+                            pass
                 finally:
                     loop_task.cancel()
                     try:
@@ -645,11 +665,18 @@ class ConversationOrchestrator:
         (``is_phone_call=False``) are never suppressed, and listening-state
         SPEECH_STARTED events (no active utterance) pass through so normal
         turn tracking is preserved.
+
+        NOTE: We suppress barge-in when the orchestrator is in AI_SPEAKING
+        state even if TTS hasn't started streaming yet. This prevents a race
+        condition where STT noise/echo cancels the TTS before any bytes are
+        sent (resulting in silent turns).
         """
 
         if not self._is_phone_call or settings.PHONE_CALL_BARGE_IN_ENABLED:
             return False
-        if not tts_session.is_speaking:
+        # Suppress when orchestrator is in AI_SPEAKING state OR TTS is actively
+        # streaming — covers the gap between state transition and first audio byte.
+        if self.state != ConversationState.AI_SPEAKING and not tts_session.is_speaking:
             return False
 
         log.info(
@@ -835,13 +862,40 @@ class ConversationOrchestrator:
             history_length=result.history_length,
         )
 
-        # PLACEHOLDER meeting-status detection over this turn.
-        new_status = detect_meeting_status(
-            current=self._meeting_status,
-            user_text=user_text,
-            agent_text=result.reply or "",
-        )
-        await self._set_meeting_status(new_status, reason="turn")
+        # --- Meeting booking handler (real Google Calendar integration) ---
+        if self._booking_handler is not None:
+            booking_result = await self._booking_handler.process_turn(
+                call_id=self._call_id,
+                user_text=user_text,
+                agent_text=result.reply or "",
+                org_id=self._organization_id,
+                lead_id=None,
+                lead_email=self._extra_context.get("lead_email", ""),
+                lead_name=self._extra_context.get("lead_name", ""),
+                timezone=self._extra_context.get("timezone", "UTC"),
+                duration_minutes=int(
+                    self._extra_context.get(
+                        "meeting_duration_minutes",
+                        settings.CALENDAR_DEFAULT_DURATION_MINUTES,
+                    )
+                ),
+            )
+            if booking_result.meeting_booked:
+                await self._set_meeting_status(MEETING_STATUS_BOOKED, reason="booked")
+            if booking_result.consumed and booking_result.speak_override:
+                await self._state_machine.transition(
+                    ConversationState.AI_SPEAKING, reason="booking_response"
+                )
+                await self._safe_speak(tts_session, booking_result.speak_override, source="booking")
+                return
+        else:
+            # Fallback: lightweight regex-based detection (no real booking)
+            new_status = detect_meeting_status(
+                current=self._meeting_status,
+                user_text=user_text,
+                agent_text=result.reply or "",
+            )
+            await self._set_meeting_status(new_status, reason="turn")
 
         if result.qualification.status == "disqualified":
             await self._state_machine.transition(

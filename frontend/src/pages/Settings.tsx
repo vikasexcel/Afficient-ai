@@ -12,6 +12,7 @@ import OrganizationCard from "@/components/settings/OrganizationCard";
 import ProfileCard from "@/components/settings/ProfileCard";
 import AppearanceCard from "@/components/settings/AppearanceCard";
 import SecurityCard from "@/components/settings/SecurityCard";
+import CalendarIntegrationCard from "@/components/settings/CalendarIntegrationCard";
 import { canManageMembers, useMe } from "@/store/me";
 
 export default function Settings() {
@@ -65,6 +66,14 @@ export default function Settings() {
             >
               Security
             </TabsTrigger>
+            {admin && (
+              <TabsTrigger
+                value="integrations"
+                className="data-[state=active]:bg-transparent data-[state=active]:text-white data-[state=active]:shadow-none data-[state=active]:border-b-2 data-[state=active]:border-violet-500 rounded-none text-white/50 text-[13px] px-3 pb-2.5 pt-0 -mb-px"
+              >
+                Integrations
+              </TabsTrigger>
+            )}
           </TabsList>
 
           {admin && (
@@ -90,6 +99,12 @@ export default function Settings() {
           <TabsContent value="security" className="mt-6">
             <SecurityCard />
           </TabsContent>
+
+          {admin && (
+            <TabsContent value="integrations" className="mt-6">
+              <CalendarIntegrationCard />
+            </TabsContent>
+          )}
         </Tabs>
       </div>
     </AppLayout>

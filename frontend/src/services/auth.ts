@@ -108,3 +108,13 @@ export async function logout(refresh_token: string) {
   const res = await api.post("/auth/logout", { refresh_token });
   return res.data;
 }
+
+export async function forgotPassword(email: string): Promise<{ message: string }> {
+  const res = await api.post<{ message: string }>("/auth/forgot-password", { email });
+  return res.data;
+}
+
+export async function resetPassword(token: string, new_password: string): Promise<{ message: string }> {
+  const res = await api.post<{ message: string }>("/auth/reset-password", { token, new_password });
+  return res.data;
+}

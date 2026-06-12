@@ -398,7 +398,7 @@ export default function Documentation() {
               Documentation
             </h1>
             <p className="text-[13px] text-white/40 mt-1 max-w-2xl">
-              Everything you need to know about running Aifficient — from your
+              Everything you need to know about running Tellaigent — from your
               first campaign to advanced playbook branching.
             </p>
           </div>

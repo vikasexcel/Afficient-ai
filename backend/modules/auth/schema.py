@@ -62,6 +62,20 @@ class LogoutInput(BaseModel):
     refresh_token: str = Field(min_length=1, max_length=4096)
 
 
+class ForgotPasswordInput(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordInput(BaseModel):
+    token: str = Field(min_length=1, max_length=128)
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def _new_password(cls, v: str) -> str:
+        return _validate_password(v)
+
+
 # ---------------------------------------------------------------------------
 # Audit log response model (org-scoped, paginated)
 # ---------------------------------------------------------------------------

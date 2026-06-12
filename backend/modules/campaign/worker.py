@@ -143,6 +143,10 @@ def _campaign_dial_context(
         ),
         "lead_name": lead.get("name"),
         "lead_phone": phone,
+        # Booking context — passed into extra_context so the BookingHandler
+        # can send the confirmation email and check availability per lead.
+        "lead_email": lead.get("email") or "",
+        "timezone": lead.get("timezone") or campaign.timezone or "UTC",
     }
 
 
@@ -231,6 +235,7 @@ async def _dial_execution(
             lead_id=dial["lead_id"],
             lead_name=dial["lead_name"],
             lead_phone=dial["lead_phone"],
+            extra_context=_dial_extra_context(dial),
             execution_id=execution.id,
         )
     except Exception as exc:
@@ -272,6 +277,15 @@ def _internal_dispatch_url() -> str:
     return f"{base}{settings.API_PREFIX}/telephony/calls"
 
 
+def _dial_extra_context(dial: dict) -> dict:
+    extra_ctx: dict = {}
+    if dial.get("lead_email"):
+        extra_ctx["lead_email"] = dial["lead_email"]
+    if dial.get("timezone"):
+        extra_ctx["timezone"] = dial["timezone"]
+    return extra_ctx
+
+
 def _build_dial_payload(dial: dict, execution: Execution) -> dict:
     """Serialize a dial context into the ``InitiateCallRequest`` body.
 
@@ -286,7 +300,11 @@ def _build_dial_payload(dial: dict, execution: Execution) -> dict:
     def _s(v):
         return str(v) if v is not None else None
 
-    return {
+    # Collect booking-context fields into extra_context so the BookingHandler
+    # inside the FastAPI process receives them on the live call.
+    extra_ctx = _dial_extra_context(dial)
+
+    payload = {
         "to_number": dial["to_number"],
         "organization_id": _s(dial["organization_id"]),
         "created_by": _s(dial["created_by"]),
@@ -297,6 +315,9 @@ def _build_dial_payload(dial: dict, execution: Execution) -> dict:
         "lead_phone": dial["lead_phone"],
         "execution_id": str(execution.id),
     }
+    if extra_ctx:
+        payload["extra_context"] = extra_ctx
+    return payload
 
 
 def _dispatch_dial_http(

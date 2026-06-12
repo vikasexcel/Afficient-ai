@@ -5,6 +5,7 @@ import {
 import Home from "@/pages/Home";
 import Login from "@/pages/Login";
 import Signup from "@/pages/Signup";
+import ResetPassword from "@/pages/ResetPassword";
 import Dashboard from "@/pages/Dashboard";
 import Campaigns from "@/pages/Campaigns";
 import Calls from "@/pages/Calls";
@@ -62,6 +63,11 @@ export const router =
     {
       path: "/signup",
       element: <Signup />,
+    },
+
+    {
+      path: "/reset-password",
+      element: <ResetPassword />,
     },
     {
       path: "/dashboard",

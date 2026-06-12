@@ -18,10 +18,16 @@ Current state of features (as observed in code):
 - **ConversationOrchestrator** wiring STT → GPT-4o → TTS with barge-in — implemented (backend) and exercisable via `scripts/run_ai_agent.py`.
 - **Playbooks** — full CRUD, publish/archive/duplicate, versioned snapshots, dry-run `/test`, declarative branch rules with strict `when`-key allowlist. Drives prompts + qualification on AI calls.
 - Campaigns / workflows / executions — **wired end-to-end** including a real **dialing pipeline**: activation enqueues per-lead executions, the `CampaignScheduler` (Celery Beat) paces dispatch within business hours, and the worker places real outbound calls via `TelephonyService` (gated by `CAMPAIGN_TELEPHONY_DIALING_ENABLED`). Retry engine, AMD/voicemail-drop, and pacing are implemented. Dial failures fail the execution (no silent LLM fallback). Auth + tenant-scoping enforced on `/campaigns/*`.
+- **Graph-based workflow execution engine** — `Workflow.nodes` / `Workflow.edges` drive a node-handler loop in `worker.py`. Six node types registered: `CALL`, `WAIT`, `EMAIL`, `LINKEDIN`, `CONDITION`, `STOP`. The Celery scheduler uses an **HTTP dispatch path** (`CAMPAIGN_DISPATCH_VIA_HTTP=true`, default) to hand telephony CALL nodes to the FastAPI process so the AI agent lifecycle runs on the long-lived uvicorn event loop.
+- **Email campaign node** — `EmailService` renders `{{firstName}}`/`{{lastName}}`/… templates, sends via SMTP, logs `email_sent`/`email_failed` to `lead_activities`. Inbound replies received via `POST /api/v1/inbound/email` (SendGrid / Mailgun / generic JSON); `EmailConversationService` drives AI-powered reply threads (max turns: `EMAIL_CONVERSATION_MAX_TURNS`).
+- **LinkedIn campaign node** — `LinkedInService` (Phase 2H mock provider) handles connection requests + direct messages with same `{{placeholder}}` template syntax; logs `li_connect`/`li_message`/`li_failed` to `lead_activities`.
+- **Workflow templates** — system (global) and org-scoped custom templates (`WorkflowTemplate` model). System templates can be cloned but not modified; custom templates are org-private. Full CRUD via `/campaigns/templates/*`.
 - **Telephony (Twilio + LiveKit SIP)** — outbound originate + status/voice webhooks + `<Dial><Sip>` bridge, Answering Machine Detection + voicemail drop, and reconciliation of terminal call outcomes back onto campaign executions. Mock-origination path explicitly **refuses to run when `ENV=production`**.
 - Frontend **Calls** and **Transcripts** pages — **wired to the live backend** (GPT-4o chat, Deepgram transcribe smoke, real transcripts + summaries). **Analytics** page remains UI-only with mock data.
+- **Google Calendar integration** — OAuth 2.0 connect per org, Fernet-encrypted token storage, free-slot availability query, meeting booking with Google Meet link. Settings UI in the Integrations tab. `GET /api/v1/calendar/status` returns `null` when no calendar is connected.
 - **Leads** — full Phase 1 Lead Management implemented end-to-end: backend module (`modules/leads/`), migration, and frontend wired to real APIs. See §4 for module details.
 - **Test suite** — 29 pytest cases under `backend/tests/` cover auth, audit scoping, password rules, campaign worker, playbook branches, tenant isolation, rate limit, Twilio prod guard. Run with `pytest tests/`.
+- **Google Calendar auto-booking** — **implemented end-to-end**. When a lead on a live call says "yes, let's schedule", the AI automatically asks for their preferred time, checks Google Calendar availability (FreeBusy API), books the meeting with a Google Meet link, and sends a confirmation email. Multi-turn voice state machine (idle → asking_time → confirming/suggesting → booked) persisted in Redis via `BookingState`. OAuth tokens stored Fernet-encrypted in `calendar_integrations` table. Org-level calendar (one Google account per org). Frontend "Integrations" tab in Settings for connect/disconnect. New env vars: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`, `TOKEN_ENCRYPTION_KEY`.
 
 ---
 
@@ -43,7 +49,7 @@ Current state of features (as observed in code):
 - **elevenlabs** — TTS SDK
 - **openai** (`>=1.51,<2`) — official OpenAI Python SDK (GPT-4o)
 - **deepgram-sdk** (`7.2.0`) — Deepgram Speech-to-Text SDK (nova-3)
-- **celery / kombu** — listed in `requirements.txt` (no worker code found yet; likely planned)
+- **celery / kombu** — Celery Beat + worker for the campaign scheduler tick; `celery_app.py` + `tasks.py`
 - **prometheus-fastapi-instrumentator / prometheus_client** — present in requirements (not wired into `main.py`)
 - **smtplib** (stdlib) — SMTP email delivery
 - **pytest + pytest-asyncio** — backend test runner (added; not in `requirements.txt` yet — install separately in dev/CI)
@@ -145,13 +151,46 @@ afficient-ai/
 │   │   │   ├── router.py / service.py / repository.py / schema.py
 │   │   │   ├── model.py            Campaign (status, playbook_id, lead_list_id,
 │   │   │   │                       schedule, business_hours, retry/voicemail cfg, pacing)
-│   │   │   ├── workflow_model.py   Workflow
-│   │   │   ├── execution_model.py  Execution (status, outcome, retry bookkeeping)
-│   │   │   ├── worker.py           run_execution: places a REAL outbound call via
-│   │   │   │                       TelephonyService when dialing is enabled (no silent
-│   │   │   │                       LLM fallback on dial failure); else LLM-plan stub
+│   │   │   ├── workflow_model.py   Workflow (nodes/edges graph definition)
+│   │   │   ├── workflow_service.py WorkflowService: graph validation, versioning, state
+│   │   │   ├── workflow_version_model.py / workflow_version_repository.py
+│   │   │   │                       WorkflowVersion snapshots (auto-created on graph update)
+│   │   │   ├── execution_model.py  Execution (status, current_node_id, node_outputs,
+│   │   │   │                       outcome, retry bookkeeping)
+│   │   │   ├── execution_service.py ExecutionService: construction, status transitions,
+│   │   │   │                       node-position tracking (update_current_node,
+│   │   │   │                       update_outputs, advance_execution)
+│   │   │   ├── worker.py           dispatch_execution / run_execution / _run_graph_execution:
+│   │   │   │                       graph node-handler loop; HTTP-dispatch CALL nodes to
+│   │   │   │                       FastAPI; LLM-plan stub for non-dial/legacy executions
+│   │   │   ├── node_handlers/      graph node handler registry
+│   │   │   │   ├── __init__.py     NODE_HANDLERS dict (CALL/WAIT/EMAIL/LINKEDIN/CONDITION/STOP)
+│   │   │   │   ├── base.py         BaseNodeHandler + NodeResult dataclass
+│   │   │   │   ├── call_handler.py CALL: telephony dispatch or _dial_execution
+│   │   │   │   ├── wait_handler.py WAIT: delay/pause node
+│   │   │   │   ├── email_handler.py EMAIL: delegates to EmailService
+│   │   │   │   ├── linkedin_handler.py LINKEDIN: delegates to LinkedInService
+│   │   │   │   ├── condition_handler.py CONDITION: evaluates rules, sets next_node_id
+│   │   │   │   └── stop_handler.py STOP: marks execution completed/failed
+│   │   │   ├── email_service.py    EmailService: {{placeholder}} rendering, SMTP send,
+│   │   │   │                       LeadActivity logging (email_sent/email_failed)
+│   │   │   ├── linkedin_service.py LinkedInService: mock provider (Phase 2H), connection
+│   │   │   │                       requests + DMs, LeadActivity logging
+│   │   │   ├── template_model.py / template_repository.py / template_service.py /
+│   │   │   │   template_router.py / template_schema.py
+│   │   │   │                       WorkflowTemplate: system (global) + org-scoped custom
+│   │   │   │                       templates; CRUD at /campaigns/templates/*
+│   │   │   ├── email_conversation_model.py / email_conversation_service.py /
+│   │   │   │   email_reply_service.py
+│   │   │   │                       AI-powered inbound reply threads (EmailConversation);
+│   │   │   │                       EmailConversationService drives multi-turn reply flow
+│   │   │   ├── inbound_email_router.py  POST /api/v1/inbound/email — receives parsed
+│   │   │   │                       inbound replies from SendGrid / Mailgun / generic JSON;
+│   │   │   │                       optional HMAC-SHA256 signature verification
 │   │   │   ├── scheduler.py        CampaignScheduler tick (auto-activate, paced
 │   │   │   │                       dispatch, completion, metrics, retry requeue)
+│   │   │   ├── scheduler_diagnostics.py scheduler health + timing diagnostics
+│   │   │   ├── scheduler_keys.py   Redis key helpers for scheduler state
 │   │   │   ├── scheduling.py       business-hours + pacing math
 │   │   │   ├── retry.py            retry engine (process_outcome, backoff, outcomes)
 │   │   │   ├── voicemail.py        AMD / voicemail-drop config + recording upload
@@ -192,6 +231,14 @@ afficient-ai/
 │   │   │   ├── streamer.py         TTSStreamer: ElevenLabs → LiveKit room
 │   │   │   ├── elevenlabs_client.py
 │   │   │   └── schema.py / dependencies.py / exceptions.py
+│   │   ├── calendar/               Google Calendar OAuth integration
+│   │   │   ├── router.py           auth_router (/auth/google, /callback) + api_router (/calendar/*)
+│   │   │   ├── service.py          CalendarService: upsert/delete integration, get_free_slots, book_meeting
+│   │   │   ├── model.py            CalendarIntegration (org-scoped, one per org, Fernet-encrypted tokens)
+│   │   │   ├── encryption.py       encrypt_token / decrypt_token (Fernet, requires TOKEN_ENCRYPTION_KEY)
+│   │   │   ├── schema.py           CalendarIntegrationOut, FreeSlot, AvailabilityResponse, BookingRequest, BookedEvent
+│   │   │   ├── dependencies.py     get_calendar_service singleton
+│   │   │   └── exceptions.py       CalendarError, NoCalendarError
 │   │   └── stt/                    Deepgram speech-to-text
 │   │       ├── router.py           POST /stt/transcribe (smoke/debug endpoint)
 │   │       ├── streamer.py         STTSession: LiveKit audio → Deepgram → TranscriptEvent
@@ -253,7 +300,8 @@ afficient-ai/
         │   ├── livekit.ts
         │   ├── ai.ts               GPT-4o: generate, converse, listCalls, getTranscript,
         │   │                       getQualification, finalizeCall, listPersonas
-        │   └── stt.ts              Deepgram: transcribe (smoke endpoint)
+        │   ├── stt.ts              Deepgram: transcribe (smoke endpoint)
+        │   └── calendar.ts         Google Calendar: getCalendarStatus, disconnectCalendar
         │
         ├── store/                  Zustand stores
         │   ├── auth.ts             token + refreshToken (persisted in localStorage)
@@ -283,7 +331,10 @@ afficient-ai/
 | `organization` | Read/rename/transfer-ownership/delete current tenant | `modules/organization/router.py` |
 | `members` | Org membership CRUD + temp-password reset + invitation email | `modules/members/*` |
 | `leads` | Phase 1 Lead Management: org-scoped `Lead` + `LeadList` (many-to-many via `lead_list_memberships`). Full CRUD + search + pagination + duplicate detection (`phone_normalized`). Audit logs: `LEAD_CREATED`, `LEAD_UPDATED`, `LEAD_DELETED`, `LEAD_LIST_CREATED`. Lead fields: `first_name`, `last_name`, `email`, `phone`, `linkedin_url`, `company`, `job_title`, `status`, `tags`, `extra_data`. | `modules/leads/*` |
-| `campaign` | Campaign → Workflow → Execution chain. Activation enqueues one queued `Execution` per lead; the `CampaignScheduler` tick (Celery Beat) paces dispatch within business hours; the worker places a **real outbound call** via `TelephonyService` (Twilio/LiveKit SIP) per lead when `CAMPAIGN_TELEPHONY_DIALING_ENABLED`. Retry engine + AMD/voicemail-drop + pacing supported. | `modules/campaign/*` |
+| `campaign` | Campaign → Workflow → Execution chain. Activation enqueues one queued `Execution` per lead; the `CampaignScheduler` tick (Celery Beat) paces dispatch within business hours; the worker drives a **graph node-handler loop** (`_run_graph_execution`) for graph-based workflows, or places a **real outbound call** via `TelephonyService` when `CAMPAIGN_TELEPHONY_DIALING_ENABLED`. CALL nodes are dispatched to the FastAPI process over authenticated HTTP (`CAMPAIGN_DISPATCH_VIA_HTTP`). Email/LinkedIn/Wait/Condition/Stop nodes also supported. Retry engine + AMD/voicemail-drop + pacing. `WorkflowService` validates + versions the graph; `ExecutionService` manages node-position tracking. | `modules/campaign/*` |
+| `campaign.templates` | System (global) + org-scoped custom workflow templates (`WorkflowTemplate`). Cloneable; system templates are read-only. Full CRUD at `/campaigns/templates/*`. | `modules/campaign/template_*` |
+| `campaign.email` | Outbound email node: `EmailService` renders `{{placeholder}}` templates, sends via SMTP, logs to `lead_activities`. Inbound reply webhook at `POST /api/v1/inbound/email` (SendGrid/Mailgun/generic JSON). `EmailConversationService` drives AI-powered multi-turn reply threads (`EMAIL_CONVERSATION_MAX_TURNS`). | `modules/campaign/email_*.py`, `inbound_email_router.py` |
+| `campaign.linkedin` | LinkedIn node: `LinkedInService` (Phase 2H mock provider) — connection requests + direct messages, same `{{placeholder}}` template syntax, logs `li_connect`/`li_message`/`li_failed` to `lead_activities`. | `modules/campaign/linkedin_service.py` |
 | `telephony` | Outbound/inbound PSTN via Twilio + LiveKit SIP. `initiate_outbound` creates a `telephony_calls` row + LiveKit room + AI agent, originates the call, and reconciles the terminal status webhook back onto the linked campaign execution. | `modules/telephony/*` |
 | `playbook` | Playbook CRUD, versioned snapshots, publish/archive/duplicate, call-apply (persona/framework/voice/opening line) | `modules/playbook/*` |
 | `ai` | GPT-4o conversation engine: stateless `generate`, stateful `converse`, Redis memory, BANT/MEDDICC qualification, Postgres transcripts/summaries, live STT→LLM→TTS orchestrator | `modules/ai/*` |
@@ -291,6 +342,7 @@ afficient-ai/
 | `tts` | List voices, speak text into a LiveKit room via ElevenLabs PCM stream | `modules/tts/*` |
 | `stt` | Subscribe to a LiveKit room as an agent, pipe audio into Deepgram, return TranscriptEvents | `modules/stt/*` |
 | `analytics` | Phase 5A read-only BI: 7 GET endpoints (overview, email, calls, LinkedIn, funnel, workflow, trends). Scoped to tenant org via `campaigns→workflows→executions` join. No mutations. | `modules/analytics/*` |
+| `calendar` | Google Calendar OAuth integration per org. `GET /auth/google` starts the OAuth flow; `GET /auth/google/callback` exchanges the code and persists Fernet-encrypted tokens. `GET /api/v1/calendar/status` returns the connected integration or `null`. `POST /api/v1/calendar/disconnect` revokes and deletes. `GET /api/v1/calendar/availability` returns free slots for a date. `POST /api/v1/calendar/book` books a meeting (Google Meet link). Tokens stored encrypted at rest via `TOKEN_ENCRYPTION_KEY` (Fernet). | `modules/calendar/*` |
 | `health` | `/health` smoke check | `modules/health/router.py` |
 
 ### Cross-cutting
@@ -314,7 +366,7 @@ afficient-ai/
 | Leads | **wired to backend** — real CRUD (add/edit/delete/search), paginated list, Lead + LeadList management | `pages/Leads.tsx`, `services/lead.ts`, `types/lead.ts`, `components/leads/` |
 | Analytics | **real data** (Phase 5A) — 7 tabs (Overview, Campaigns, Email, Calls, LinkedIn, Funnel, Workflow), date-range selector (7/30/90d), CSV/JSON/PDF export. Wired to 7 `/analytics/*` read-only APIs. | `pages/Analytics.tsx`, `services/analytics.ts`, `components/analytics/` |
 | Transcripts | Real calls from `GET /ai/calls`, per-call transcript from `GET /ai/calls/{id}/transcript`, summary + qualification, finalize + export JSON | `pages/Transcripts.tsx`, `services/ai.ts` |
-| Settings | tabs: Members, Organization, Profile, Appearance, Security | gated by role via `store/me.ts` helpers |
+| Settings | tabs: Members, Organization, Profile, Appearance, Security, **Integrations** (Google Calendar connect/disconnect) | gated by role via `store/me.ts` helpers |
 | Documentation | in-app docs hub: sticky topic nav + search, 10 sections (getting started, campaigns, playbooks, leads, calls, analytics, transcripts, settings, roles & permissions, FAQ). Reached from the avatar dropdown in `Header.tsx` | `pages/Documentation.tsx` |
 
 ---
@@ -357,11 +409,15 @@ Backend routes are mounted under `settings.API_PREFIX` (default `/api/v1`):
 | `/leads` | leads | `POST /`, `GET /`, `GET /{id}`, `PATCH /{id}`, `DELETE /{id}` |
 | `/lead-lists` | leads | `GET /`, `POST /`, `PATCH /{id}`, `DELETE /{id}`, `POST /{id}/leads`, `DELETE /{id}/leads` |
 | `/campaigns` | campaign | `POST /`, `GET /`, `POST /activate`, `POST /execute/{workflow_id}`, `GET /executions/{id}`, `GET /executions/{id}/retry-history`, `POST /{id}/pause`, `POST /{id}/resume`, `GET /{id}/schedule-status`, `GET /{id}/metrics` (incl. `failed_executions`), `GET /{id}/retries`, `GET|POST /{id}/voicemail`, `GET|PATCH|DELETE /{id}` |
+| `/campaigns/templates` | campaign (templates) | `GET /`, `POST /`, `GET /{id}`, `PUT /{id}`, `DELETE /{id}`, `POST /{id}/clone` |
+| `/inbound/email` | campaign (inbound email) | `POST /` — receives inbound email replies from SendGrid/Mailgun/generic JSON; no auth header required (optional HMAC-SHA256 via `INBOUND_EMAIL_WEBHOOK_SECRET`) |
 | `/livekit` | livekit | `POST /rooms`, `GET /rooms`, `GET /rooms/{name}`, `DELETE /rooms/{name}`, `POST /tokens`, `GET /sessions/{room_name}` |
 | `/tts` | tts | `GET /voices`, `POST /speak` |
 | `/stt` | stt | `POST /transcribe` (joins a LiveKit room as a Deepgram subscriber for N seconds, returns events) |
 | `/ai` | ai | `POST /generate` (stateless), `POST /converse` (stateful turn), `GET /calls`, `GET /calls/{id}/transcript`, `GET /calls/{id}/qualification`, `POST /calls/{id}/finalize`, `GET /personas` |
 | `/analytics` | analytics | `GET /overview`, `GET /email`, `GET /calls`, `GET /linkedin`, `GET /funnel`, `GET /workflow`, `GET /trends` — all accept `?days=` (1–365, default 30). Read-only, tenant-scoped. |
+| `/calendar` | calendar (management) | `GET /status` (returns `CalendarIntegrationOut` or `null`), `POST /disconnect`, `GET /availability?date_iso=&tz=&duration_minutes=&count=`, `POST /book` |
+| `/auth/google` (no prefix) | calendar (OAuth) | `GET /` → returns `{auth_url}` to start Google OAuth; `GET /callback` → exchanges code, persists tokens, redirects to frontend `/settings?connected=1` |
 
 ---
 
@@ -651,6 +707,8 @@ If SMTP isn't fully configured, `mailer.py` logs a warning and skips sending —
 | `ELEVENLABS_SAMPLE_RATE` | `24000` |
 | `ELEVENLABS_AGENT_IDENTITY` | `ai-agent` |
 | `ELEVENLABS_AGENT_NAME` | `AI Agent` |
+| `ELEVENLABS_PREVIEW_FORMAT` | `mp3_44100_128` | Output format for in-browser voice previews. |
+| `TTS_VOICE_REGISTRY_JSON` | `""` | Optional JSON array overriding/extending the built-in curated voice registry. |
 
 ### Deepgram STT
 
@@ -693,24 +751,88 @@ If SMTP isn't fully configured, `mailer.py` logs a warning and skips sending —
 |---|---|---|---|
 | `TWILIO_ACCOUNT_SID` | for PSTN | `""` | Twilio account SID. Values starting with `ACdummy` trigger mock-mode in dev and **raise `TelephonyConfigError` in production**. |
 | `TWILIO_AUTH_TOKEN` | for PSTN | `""` | REST + signature-validation secret. |
-| `TWILIO_FROM_NUMBER` | for PSTN | `""` | Default E.164 caller-id. |
-| `TWILIO_PUBLIC_BASE_URL` | **for production** | `""` | Fully-qualified URL used in `voice_url` / `status_callback` registered with Twilio. If empty, falls back to `request.url.netloc` — won't work behind a private host. |
-| `TWILIO_VALIDATE_SIGNATURE` | recommend `true` in prod | `false` | When false, webhooks accept any signature. `main.py` emits `app.startup.unsafe` if `ENV=production` and this is false. |
+| `TWILIO_API_KEY_SID` | no | `""` | Optional Twilio API Key SID (scoped key; preferred for production over master auth token). When both SID+secret are set, SDK uses API Key auth. |
+| `TWILIO_API_KEY_SECRET` | no | `""` | Twilio API Key secret. |
+| `TWILIO_PHONE_NUMBER` | for PSTN | `""` | Default E.164 caller-id (previously `TWILIO_FROM_NUMBER`). |
+| `TWILIO_PUBLIC_BASE_URL` | **for production** | `http://localhost:8000` | Fully-qualified URL used in `voice_url` / `status_callback` registered with Twilio. Must be HTTPS in prod. |
+| `TWILIO_VALIDATE_SIGNATURE` | recommend `true` in prod | `true` | When false, webhooks accept any signature. `main.py` emits `app.startup.unsafe` if `ENV=production` and this is false. |
 | `TWILIO_STATUS_CALLBACK_EVENTS` | no | `initiated,ringing,answered,completed` | Subset of Twilio call lifecycle events to receive. |
+| `TWILIO_DIAL_TIMEOUT_SECONDS` | no | `30` | Ring/dial timeout per call. |
+| `TWILIO_CALL_RECORD` | no | `false` | Enable call recording. |
+| `TWILIO_MAX_RETRIES` | no | `2` | SDK retry count for Twilio REST calls. |
+| `TWILIO_RETRY_BACKOFF_SECONDS` | no | `5.0` | Backoff between Twilio REST retries. |
+| `TWILIO_CALLER_ID_NAME` | no | `"Aifficient"` | Outbound caller-ID name shown on supported carriers. |
 | `TWILIO_AMD_ENABLED` | no | `true` | Master switch for Answering Machine Detection (required for voicemail drop). |
+| `TWILIO_AMD_MODE` | no | `"DetectMessageEnd"` | AMD mode: `"Enable"` (detect human vs machine) or `"DetectMessageEnd"` (wait for beep before voicemail drop). |
+| `TWILIO_AMD_TIMEOUT_SECONDS` | no | `30` | Max seconds Twilio waits to classify answer (3–59). |
+| `TWILIO_AMD_ASYNC` | no | `true` | Async AMD — Twilio fetches TwiML immediately on answer and posts verdict separately, so humans are bridged to the AI within ~1s. Set `false` for legacy synchronous AMD. |
 | `LIVEKIT_SIP_URI` | for SIP bridge | `""` | LiveKit SIP host; Twilio `<Dial><Sip>` bridges the PSTN leg into the agent room. |
 | `LIVEKIT_SIP_OUTBOUND_TRUNK_ID` | no | `""` | When set (and AMD off), origination uses LiveKit `CreateSIPParticipant` instead of Twilio. AMD calls always force the Twilio path. |
+| `LIVEKIT_SIP_RING_TIMEOUT_SECONDS` | no | `30.0` | Ring timeout for LiveKit-originated SIP calls. |
+| `VOICEMAIL_UPLOAD_DIR` | no | `uploads/voicemail` | Local directory for uploaded voicemail audio. |
+| `VOICEMAIL_MAX_BYTES` | no | `5242880` (5 MB) | Max upload size for voicemail recordings. |
+| `VOICEMAIL_ALLOWED_FORMATS` | no | `mp3,wav,x-wav,wave,ogg,mpeg,aac` | Allowed audio formats for voicemail. |
+| `VOICEMAIL_URL_NETWORK_CHECK` | no | `false` | Validate voicemail URL reachability on configure (disable in offline envs). |
+| `VOICEMAIL_REQUIRE_PUBLIC_URL` | no | `true` | Reject localhost/private voicemail URLs (Twilio `<Play>` runs from Twilio's cloud). |
+| `VOICEMAIL_PUBLIC_ROUTE` | no | `/media/voicemail` | Public HTTP route for serving uploaded recordings. |
 
 ### Campaign dialing & scheduler
 
 | Var | Required | Default | Purpose |
 |---|---|---|---|
 | `CAMPAIGN_TELEPHONY_DIALING_ENABLED` | no | `false` | When `true`, the worker places a **real** outbound call per campaign lead via `TelephonyService.initiate_outbound`. When `false`, executions run the legacy in-process LLM-plan stub. (Set `true` in `backend/.env` for live dialing.) |
+| `CAMPAIGN_DISPATCH_VIA_HTTP` | no | `true` | When `true` (default), Celery scheduler dispatches CALL nodes to FastAPI via authenticated HTTP. Set `false` for legacy in-process `asyncio.run` (debug/testing only). |
+| `INTERNAL_API_BASE_URL` | no | `http://localhost:8000` | FastAPI base URL for Celery → FastAPI internal dispatch. |
+| `INTERNAL_SERVICE_TOKEN` | no | falls back to `JWT_SECRET` | Shared secret sent as `X-Internal-Token` on internal dispatch calls. |
+| `CAMPAIGN_DISPATCH_HTTP_TIMEOUT_SECONDS` | no | `30.0` | HTTP timeout for scheduler → FastAPI dispatch. |
 | `CELERY_BROKER_URL` | no | falls back to `REDIS_URL` | Broker for the scheduler tick. |
 | `CELERY_RESULT_BACKEND` | no | falls back to `REDIS_URL` | Result backend. |
 | `CAMPAIGN_SCHEDULER_INTERVAL_SECONDS` | no | `60.0` | Celery Beat tick cadence (activate due campaigns + paced dispatch). |
 | `CAMPAIGN_DEFAULT_CALLS_PER_HOUR` | no | `60` | Pacing fallback when a campaign omits its own (`0` = unlimited). |
 | `CAMPAIGN_DEFAULT_MAX_CONCURRENT_CALLS` | no | `5` | Concurrency fallback (`0` = unlimited). |
+
+### Email & LinkedIn campaign nodes
+
+| Var | Default | Purpose |
+|---|---|---|
+| `INBOUND_EMAIL_WEBHOOK_SECRET` | `""` | HMAC-SHA256 secret for inbound email webhook (SendGrid/Mailgun/generic). Leave empty to accept all requests (dev/test only). |
+| `EMAIL_CONVERSATION_MAX_TURNS` | `10` | Max AI reply turns per email conversation thread before auto-close. |
+| `IMAP_HOST` | `""` | IMAP host for inbound reply polling (legacy fallback; prefer webhook). |
+| `IMAP_PORT` | `993` | |
+| `IMAP_USER` | `""` | |
+| `IMAP_PASSWORD` | `""` | |
+| `IMAP_USE_SSL` | `true` | |
+| `IMAP_REPLY_CHECK_TIMEOUT_SECONDS` | `30` | Seconds to wait for IMAP reply in test runs. |
+
+### AI pipeline resilience (barge-in, recovery, retries)
+
+| Var | Default | Purpose |
+|---|---|---|
+| `BARGE_IN_ON_PARTIAL` | `true` | Use Deepgram PARTIAL transcript as a second barge-in trigger (improves latency). |
+| `BARGE_IN_PARTIAL_MIN_CHARS` | `2` | Min chars in a PARTIAL to count as speech (filters noise-driven false positives). |
+| `PHONE_CALL_BARGE_IN_ENABLED` | `false` | Allow barge-in on PSTN calls (disabled by default due to PSTN echo/line noise). |
+| `BARGE_IN_COOLDOWN_MS` | `250` | Minimum ms between two barge-in events. |
+| `BARGE_IN_MAX_EVENTS_PER_CALL` | `200` | Max interruption events kept per call in Redis (FIFO). |
+| `AI_RECOVERY_LLM_FALLBACK_TEXT` | `"Sorry, I had a brief issue on my end..."` | Spoken after irrecoverable LLM failure on a turn. |
+| `AI_RECOVERY_PIPELINE_FALLBACK_TEXT` | `"Apologies — I lost you for a moment..."` | Spoken after STT/TTS pipeline recovery. |
+| `AI_TURN_MAX_ATTEMPTS` | `3` | Per-turn LLM retry attempts (rate limit / timeout / 5xx). |
+| `AI_TURN_RETRY_BACKOFF_SECONDS` | `0.4` | Backoff between LLM turn retries. |
+| `AI_TURN_TIMEOUT_SECONDS` | `12.0` | Per-turn LLM call timeout. |
+| `STT_MAX_RECONNECT_ATTEMPTS` | `3` | Deepgram websocket reconnect attempts. |
+| `STT_RECONNECT_BACKOFF_SECONDS` | `0.5` | Backoff between Deepgram reconnects. |
+| `TTS_MAX_ATTEMPTS` | `2` | ElevenLabs per-utterance retry attempts. |
+| `TTS_RETRY_BACKOFF_SECONDS` | `0.3` | Backoff between TTS retries. |
+| `LIVEKIT_RECONNECT_ATTEMPTS` | `1` | LiveKit reconnect attempts (one retry; second failure = room destroyed). |
+| `LIVEKIT_RECONNECT_BACKOFF_SECONDS` | `1.0` | |
+
+### Google Calendar
+
+| Var | Required | Default | Purpose |
+|---|---|---|---|
+| `GOOGLE_CLIENT_ID` | for Calendar | `""` | Google OAuth 2.0 client ID. |
+| `GOOGLE_CLIENT_SECRET` | for Calendar | `""` | Google OAuth 2.0 client secret. |
+| `GOOGLE_REDIRECT_URI` | for Calendar | `https://api.aifuturegroup.co/auth/google/callback` | Must match the redirect URI registered in the Google Cloud Console. |
+| `TOKEN_ENCRYPTION_KEY` | for Calendar | `""` | Fernet base64 32-byte key for encrypting OAuth tokens at rest. Generate with `Fernet.generate_key()`. Never commit. |
 
 ### Rate limiting
 
@@ -721,7 +843,13 @@ If SMTP isn't fully configured, `mailer.py` logs a warning and skips sending —
 | `RATE_LIMIT_WINDOW_SECONDS` | `60` | Window length. |
 | `RATE_LIMIT_AUTH_REQUESTS` | `10` | Stricter bucket for `/auth/login`, `/auth/register`, `/auth/refresh`. |
 | `RATE_LIMIT_AUTH_WINDOW_SECONDS` | `60` | |
-| `RATE_LIMIT_EXEMPT_PATHS` | `"/health,/api/v1/telephony/webhooks/twilio/voice,/api/v1/telephony/webhooks/twilio/status,/docs,/openapi.json,/redoc,/favicon.ico"` | Comma-separated path prefixes. `/` (root) and all `OPTIONS` requests are always exempt. |
+| `RATE_LIMIT_AI_REQUESTS` | `30` | Dedicated bucket for AI inference (`POST /ai/generate`, `POST /ai/converse`). |
+| `RATE_LIMIT_AI_WINDOW_SECONDS` | `60` | |
+| `RATE_LIMIT_TELEPHONY_REQUESTS` | `60` | Dedicated bucket for `POST /telephony/calls` (prevents runaway Twilio spend). |
+| `RATE_LIMIT_TELEPHONY_WINDOW_SECONDS` | `60` | |
+| `RATE_LIMIT_CAMPAIGN_ACTIVATE_REQUESTS` | `20` | Dedicated bucket for `POST /campaigns/activate`. |
+| `RATE_LIMIT_CAMPAIGN_ACTIVATE_WINDOW_SECONDS` | `60` | |
+| `RATE_LIMIT_EXEMPT_PATHS` | `"/api/v1/health,/health,/,/api/v1/telephony/webhooks,/api/v1/inbound/email,/docs,/openapi.json,/redoc,/favicon.ico"` | Comma-separated path prefixes. All `OPTIONS` requests are always exempt. |
 
 Scoping: when a valid `Authorization: Bearer …` JWT is present, the limiter buckets by `user:{sub}`; otherwise it falls back to `ip:{remote_addr}`.
 
@@ -904,6 +1032,8 @@ curl -sS -X POST -d 'CallSid=PROBE' \
 16. **Tenant isolation enforced at the row level.** Cross-tenant access to AI call transcripts, playbooks, telephony calls, campaigns, workflows and executions returns `404` (never `200` with empty data, never `500`). Audit log filters via the org's `Memberships` set; lower-role users only see their own audit rows.
 17. **Mobile-first responsive UI.** The shell uses an off-canvas drawer below `lg` with body-scroll-lock and Esc/route-change auto-close, plus global `overflow-x: hidden` and `max-width: 100%` safety nets. Wide content (tables, tab strips, permission matrices) uses `overflow-x-auto` + `min-w` rather than collapsing. Layout state for the drawer lives in `store/ui.ts` (Zustand) so any descendant can toggle without prop drilling. See §9.5.
 18. **Campaign dialing pipeline (campaign → scheduler → worker → telephony).** Activation (`CampaignService.activate`) only **enqueues** one `queued` Execution per lead (frozen lead+playbook context). A per-minute Celery Beat tick (`CampaignScheduler.tick`) auto-activates due campaigns and **paces** dispatch within business hours, then calls the in-process worker. `run_execution` (`modules/campaign/worker.py`) places a **real outbound call** via `TelephonyService.initiate_outbound` for any lead execution when `CAMPAIGN_TELEPHONY_DIALING_ENABLED` is on — creating a `telephony_calls` row, a LiveKit room + AI agent, and a Twilio Call SID (or a LiveKit SIP leg when an outbound trunk is configured and AMD is off). The execution is left `running`; its terminal outcome is **reconciled asynchronously** by the Twilio status webhook (`TelephonyService._reconcile_campaign_execution`), which runs the retry engine so metrics/retries advance. **No silent LLM fallback:** dial failures (telephony unavailable, Twilio/LiveKit errors, undiallable lead) mark the execution `failed` via `process_outcome` (retry scheduled when configured) and log `CAMPAIGN_DIAL_FAILED` / `CAMPAIGN_DIAL_EXCEPTION`. The legacy LLM-plan path only runs for non-dial (generic) executions or when dialing is disabled.
+19. **Graph-based workflow execution engine.** `Workflow.nodes` / `Workflow.edges` define a directed graph of typed nodes. `_run_graph_execution` in `worker.py` drives the loop: resolve current node → look up `NODE_HANDLERS[type]` → `await handler.execute()` → persist `NodeResult.output` → advance pointer or halt. Six node types: `CALL` (telephony), `EMAIL`, `LINKEDIN`, `WAIT`, `CONDITION` (branch), `STOP`. `WorkflowService` validates/versions the graph on every update; `ExecutionService` owns node-pointer and output persistence.
+20. **Celery → FastAPI HTTP dispatch.** The AI-agent lifecycle (LiveKit room, STT/LLM/TTS, SIP bridge) must run inside the long-lived uvicorn event loop. When `CAMPAIGN_DISPATCH_VIA_HTTP=true` (default) the Celery scheduler does **not** originate calls itself — it sends an authenticated `POST {INTERNAL_API_BASE_URL}{API_PREFIX}/telephony/calls` (header `X-Internal-Token: <internal_service_token>`) to the FastAPI process, which owns room creation and agent startup. `INTERNAL_SERVICE_TOKEN` falls back to `JWT_SECRET` when unset. Set `CAMPAIGN_DISPATCH_VIA_HTTP=false` only for testing the legacy in-process `asyncio.run` path.
 
 ---
 
@@ -921,7 +1051,8 @@ These are real items found while scanning the repo, not speculation.
 - **CORS allowlist is dev-only** (`main.py` allows `localhost:5173/5174` plus `localhost:20197`). Production frontend origins must be added.
 - **Two backend launch paths can race for the ngrok tunnel.** The pm2 entry `afficient-be` binds port **20158**, but the dev convention is `uvicorn ... --port 8001`. Only one can be live at a time, and the reserved ngrok URL (`handmade-agreed-dimple.ngrok-free.dev`) must be pointed at the matching port — otherwise Twilio webhooks fail and callers hear Twilio's default error message. See §12.I for the canonical dev wiring.
 - **`get_current_org` (`modules/auth/dependencies.py`) is a stub** that returns `{"organization":"current"}` regardless of the user. The AI / campaign / playbook modules sidestep this by reading `organization_id` directly from the tenant dict in their routers. Should be removed or made real.
-- **`run_execution` (`modules/campaign/worker.py`) still runs in-process** (driven by the Celery Beat scheduler tick / request handler), not as a distributed task per call. Fine for current pacing, but a high-throughput campaign relies on the tick cadence + pacing budget rather than a fan-out worker pool.
+- **`dispatch_execution` / `run_execution` (`modules/campaign/worker.py`) still runs in-process** within the Celery Beat tick, not as a distributed fan-out task per call. CALL nodes are handed to FastAPI over HTTP (`CAMPAIGN_DISPATCH_VIA_HTTP`), which decouples the AI-agent lifecycle; but the scheduler tick itself is still a single Celery task — a high-throughput campaign with many simultaneous WAIT/EMAIL/CONDITION nodes relies on tick cadence + pacing budget rather than a true worker pool.
+- **`LinkedInService` is a Phase 2H mock provider** — it returns structured responses without performing any real browser automation or LinkedIn API calls. A real provider (PhantomBuster, Dux-Soup, LinkedIn API wrapper) must be wired in before LinkedIn nodes do anything in production.
 - **Duplicate `get_db`** helpers in `database/session.py` and `database/dependencies.py`.
 - **`prometheus-fastapi-instrumentator` is in `requirements.txt` but is not registered** in `main.py`.
 - **Celery Beat tick must be running for scheduled/paced dialing.** `modules/campaign/{celery_app,tasks}.py` define the `campaign.scheduler_tick` task; if no Celery worker+beat is running, campaigns still activate (which enqueues executions) but paced auto-dispatch won't fire. See `scripts/ensure-scheduler.sh`.
@@ -1018,3 +1149,7 @@ If something is genuinely unclear from reading the code, write **"Not clearly de
 *2026-06-08 — Phase 5C Deployment, UAT & Go-Live. New deployment artifacts: `docker-compose.prod.yml` (7-service production compose with healthchecks), `frontend/Dockerfile.prod` (multi-stage Node build + nginx), `frontend/nginx.conf` (SPA routing, API proxy, security headers), `.github/workflows/ci.yml` (4-job CI: backend tests, lint, frontend build, Docker build). E2E tests: `backend/tests/e2e/test_campaign_lifecycle.py` (31 assertions across 4 scenarios: full lifecycle, email→call, LinkedIn→condition, retry/failure). Docs created: `docs/ADMIN_GUIDE.md`, `docs/USER_GUIDE.md`, `docs/TROUBLESHOOTING.md`, `docs/FAQ.md`, `docs/ROLLBACK.md`, `docs/PRODUCTION_CHECKLIST.md`, `docs/UAT_REPORT.md`. Production readiness score: 88% (all critical issues resolved).*
 
 *2026-06-05 — campaign dialing pipeline audit + fix. (1) Root cause of "campaign launches but no calls": `worker._campaign_dial_context` referenced a non-existent `Campaign.created_by`; the `AttributeError` was swallowed by the dial `try/except`, silently falling back to the LLM stub on every lead. Fixed to `created_by=None`, so activation → scheduler → worker now actually calls `TelephonyService.initiate_outbound` (Twilio Call SID or LiveKit SIP leg, `telephony_calls` populated, status webhooks reconcile outcomes). (2) Removed the silent LLM fallback for dial failures: lead executions now fail via the retry engine (retry scheduled when configured) and log `CAMPAIGN_DIAL_FAILED` / `CAMPAIGN_DIAL_EXCEPTION`; the LLM-plan path is reserved for non-dial/generic executions or when dialing is disabled. (3) Added `failed_executions` to campaign metrics. New env var `CAMPAIGN_TELEPHONY_DIALING_ENABLED` (default false; `true` in `backend/.env`). New tests: `tests/api/test_campaign_dialing_e2e.py` (success Twilio + LiveKit-SIP paths, telephony-unavailable, Twilio failure, LiveKit failure, invalid phone). See updated §1/§3/§4/§11/§13/§14.*
+
+*2026-06-11 — Google Calendar integration implemented end-to-end. Backend: new `modules/calendar/` module — `CalendarIntegration` ORM model (`calendar_integrations` table, org-scoped, one row per org, Fernet-encrypted OAuth tokens). `CalendarService`: `upsert_integration`, `delete_integration`, `get_free_slots`, `book_meeting`. `encryption.py`: `encrypt_token`/`decrypt_token` (Fernet, requires `TOKEN_ENCRYPTION_KEY`). Two routers: `auth_router` at `/auth/google` (no prefix — matches Google Cloud Console redirect URI `https://api.aifuturegroup.co/auth/google/callback`) and `api_router` at `/api/v1/calendar`. Endpoints: `GET /auth/google` (returns `{auth_url}`), `GET /auth/google/callback` (code exchange + redirect), `GET /api/v1/calendar/status` (returns `CalendarIntegrationOut | null`), `POST /api/v1/calendar/disconnect` (best-effort token revocation + delete), `GET /api/v1/calendar/availability`, `POST /api/v1/calendar/book` (creates Google Calendar event with Meet link). Frontend: `services/calendar.ts`, `components/settings/CalendarIntegrationCard.tsx` in Settings → Integrations tab. New env vars: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`, `TOKEN_ENCRYPTION_KEY`. See updated §1/§3/§4/§5/§7/§11.*
+
+*2026-06-11 — Graph-based workflow execution engine + Celery→FastAPI HTTP dispatch + Email/LinkedIn/template node handlers. Backend: `worker.py` now drives a full graph node-handler loop (`_run_graph_execution`, `dispatch_execution`, `_dispatch_graph_execution`). New `modules/campaign/node_handlers/` package with `NODE_HANDLERS` registry (CALL, WAIT, EMAIL, LINKEDIN, CONDITION, STOP). `ExecutionService` added for node-pointer/output tracking; `WorkflowService` added for graph validation + versioning. Workflow versioning: `workflow_version_model.py` + `workflow_version_repository.py` (auto-snapshot on graph update). `EmailService`: `{{placeholder}}` template rendering, SMTP send, LeadActivity logging. `LinkedInService` (Phase 2H mock): connection requests + DMs, same template syntax. `WorkflowTemplate` model + CRUD router at `/campaigns/templates/` (system global + org-scoped custom). Inbound email reply webhook: `POST /api/v1/inbound/email` (SendGrid/Mailgun/generic JSON, optional HMAC-SHA256 via `INBOUND_EMAIL_WEBHOOK_SECRET`). `EmailConversationService` + `EmailConversationModel` for AI-powered multi-turn reply threads. Celery→FastAPI HTTP dispatch: `_dispatch_dial_http` POSTs to `POST {INTERNAL_API_BASE_URL}{API_PREFIX}/telephony/calls` with `X-Internal-Token` header so AI-agent event loop stays on uvicorn (`CAMPAIGN_DISPATCH_VIA_HTTP=true` by default). New env vars: `CAMPAIGN_DISPATCH_VIA_HTTP`, `INTERNAL_API_BASE_URL`, `INTERNAL_SERVICE_TOKEN`, `CAMPAIGN_DISPATCH_HTTP_TIMEOUT_SECONDS`, `INBOUND_EMAIL_WEBHOOK_SECRET`, `EMAIL_CONVERSATION_MAX_TURNS`, IMAP settings, barge-in tuning vars (`BARGE_IN_ON_PARTIAL`, `PHONE_CALL_BARGE_IN_ENABLED`, etc.), AI pipeline resilience vars (`AI_TURN_MAX_ATTEMPTS`, STT/TTS/LiveKit reconnect settings), `TWILIO_API_KEY_SID`/`SECRET`, `TWILIO_AMD_ASYNC`, `TWILIO_AMD_MODE`, `LIVEKIT_SIP_RING_TIMEOUT_SECONDS`, voicemail upload vars, `ELEVENLABS_PREVIEW_FORMAT`, `TTS_VOICE_REGISTRY_JSON`, new rate-limit buckets (AI inference, telephony, campaign activate). `TWILIO_FROM_NUMBER` renamed to `TWILIO_PHONE_NUMBER`. `TWILIO_VALIDATE_SIGNATURE` default corrected to `true`. See updated §1/§3/§4/§5/§11/§13.*

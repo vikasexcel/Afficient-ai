@@ -186,7 +186,7 @@ export function InviteMemberDialog({ open, onOpenChange, onCreated }: Props) {
               </DialogTitle>
               <DialogDescription className="text-[12px] text-white/40">
                 {accountExists
-                  ? "This person already has an Aifficient account, so they'll sign in with their existing password."
+                  ? "This person already has an Tellaigent account, so they'll sign in with their existing password."
                   : emailSent
                     ? `We've emailed sign-in details to ${email.trim()}.`
                     : "Share this temporary password with them. It won't be shown again."}

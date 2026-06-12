@@ -31,7 +31,7 @@ export default function AppearanceCard() {
       <div>
         <h2 className="text-[15px] font-medium text-foreground">Appearance</h2>
         <p className="text-[12px] text-muted-foreground mt-0.5">
-          Customize how Aifficient looks in your browser.
+          Customize how Tellaigent looks in your browser.
         </p>
       </div>
 

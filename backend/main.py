@@ -28,6 +28,8 @@ from modules.tts.router import router as tts_router
 from modules.campaign.template_router import router as workflow_templates_router
 from modules.analytics.router import router as analytics_router
 from modules.campaign.inbound_email_router import router as inbound_email_router
+from modules.calendar.router import api_router as calendar_api_router
+from modules.calendar.router import auth_router as calendar_auth_router
 
 
 @asynccontextmanager
@@ -143,8 +145,13 @@ for r in (
     workflow_templates_router,
     analytics_router,
     inbound_email_router,
+    calendar_api_router,
 ):
     app.include_router(r, prefix=settings.API_PREFIX)
+
+# Calendar OAuth callback is mounted at /auth/google (no /api/v1 prefix)
+# to match: https://api.aifuturegroup.co/auth/google/callback
+app.include_router(calendar_auth_router, prefix="/auth/google")
 
 # ---------------------------------------------------------------------------
 # Prometheus metrics — instrumentation via prometheus-fastapi-instrumentator.

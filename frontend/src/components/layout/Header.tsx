@@ -136,7 +136,7 @@ export default function Header() {
         </button>
         <span className="text-white/25 hidden sm:inline truncate max-w-[140px] md:max-w-none">
           {user?.organization?.name ?? "Aifficient"}
-        </span>
+     </span>
         <svg
           width="12"
           height="12"

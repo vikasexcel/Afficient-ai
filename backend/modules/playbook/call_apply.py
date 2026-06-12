@@ -49,7 +49,7 @@ def build_call_extra_context(
 
     if caller_extra:
         if playbook_controls_call:
-            for key in ("lead_name", "lead_phone"):
+            for key in ("lead_name", "lead_phone", "lead_email", "timezone"):
                 if key in caller_extra and caller_extra[key]:
                     ctx[key] = caller_extra[key]
         else:

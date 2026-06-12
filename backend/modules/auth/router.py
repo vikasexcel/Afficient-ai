@@ -16,10 +16,12 @@ from modules.auth.repository import AuthRepository
 from modules.auth.schema import (
     AuditEntry,
     AuditListResponse,
+    ForgotPasswordInput,
     LoginInput,
     LogoutInput,
     RefreshInput,
     RegisterInput,
+    ResetPasswordInput,
 )
 from modules.auth.service import AuthService
 from modules.auth.tenant import get_current_tenant
@@ -123,6 +125,22 @@ async def logout(
     db: Session = Depends(get_db),
 ):
     return AuthService.logout(db, data)
+
+
+@router.post("/forgot-password")
+async def forgot_password(
+    data: ForgotPasswordInput,
+    db: Session = Depends(get_db),
+):
+    return AuthService.forgot_password(db, data)
+
+
+@router.post("/reset-password")
+async def reset_password(
+    data: ResetPasswordInput,
+    db: Session = Depends(get_db),
+):
+    return AuthService.reset_password(db, data)
 
 
 @router.get("/audit", response_model=AuditListResponse)

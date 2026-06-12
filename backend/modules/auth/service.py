@@ -1,6 +1,8 @@
+import secrets
 from datetime import datetime, timedelta
 
 from fastapi import HTTPException
+from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -23,6 +25,9 @@ from common.security.jwt import (
     create_refresh_token,
     decode_token,
 )
+
+from common.email.mailer import send_email_async
+from config.settings import settings
 
 
 class AuthService:
@@ -207,6 +212,92 @@ class AuthService:
         db.commit()
 
         return {"message": "logged out"}
+
+    @staticmethod
+    def forgot_password(db: Session, data) -> dict:
+        email = data.email.strip().lower()
+        user = AuthRepository.get_user(db, email)
+
+        # Always return the same response to prevent email enumeration.
+        _SAFE_RESPONSE = {
+            "message": "If that email is registered, a reset link has been sent."
+        }
+
+        if user is None:
+            return _SAFE_RESPONSE
+
+        token = secrets.token_urlsafe(32)
+        user.reset_token = token
+        user.reset_token_expires_at = datetime.utcnow() + timedelta(hours=1)
+        db.commit()
+
+        _base = settings.APP_LOGIN_URL
+        if _base.endswith("/login"):
+            _base = _base[: -len("/login")]
+        _base = _base.rstrip("/")
+        reset_url = f"{_base}/reset-password?token={token}"
+
+        html_body = f"""
+        <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px;background:#07070a;color:#e5e5e5;border-radius:12px">
+          <h2 style="color:#ffffff;margin-bottom:8px">Reset your password</h2>
+          <p style="color:#a3a3a3;font-size:14px">Hi {user.full_name},<br><br>
+          Click the button below to reset your Aifficient password.
+          This link expires in <strong>1 hour</strong>.</p>
+          <a href="{reset_url}"
+             style="display:inline-block;margin-top:24px;padding:12px 28px;background:#7c3aed;color:#ffffff;text-decoration:none;border-radius:8px;font-size:14px;font-weight:600">
+            Reset Password
+          </a>
+          <p style="color:#525252;font-size:12px;margin-top:32px">
+            If you didn't request a password reset, you can safely ignore this email.
+            Your password will not change.
+          </p>
+        </div>
+        """
+
+        text_body = (
+            f"Hi {user.full_name},\n\n"
+            "Reset your Aifficient password by visiting the link below (expires in 1 hour):\n\n"
+            f"{reset_url}\n\n"
+            "If you didn't request this, ignore this email."
+        )
+
+        send_email_async(
+            to=user.email,
+            subject="Reset your Aifficient password",
+            text_body=text_body,
+            html_body=html_body,
+        )
+
+        AuthService.log_event(db, user.id, "FORGOT_PASSWORD", user.email)
+        db.commit()
+
+        return _SAFE_RESPONSE
+
+    @staticmethod
+    def reset_password(db: Session, data) -> dict:
+        user = AuthRepository.get_user_by_reset_token(db, data.token)
+
+        if user is None or user.reset_token_expires_at is None:
+            raise HTTPException(400, "Invalid or expired reset link.")
+
+        if datetime.utcnow() > user.reset_token_expires_at:
+            raise HTTPException(400, "Reset link has expired. Please request a new one.")
+
+        user.password_hash = hash_password(data.new_password)
+        user.reset_token = None
+        user.reset_token_expires_at = None
+
+        # Revoke all active sessions so stale tokens can't be reused.
+        db.execute(
+            update(UserSession)
+            .where(UserSession.user_id == user.id)
+            .values(revoked=True)
+        )
+
+        AuthService.log_event(db, user.id, "RESET_PASSWORD", user.email)
+        db.commit()
+
+        return {"message": "Password reset successfully. You can now log in."}
 
 
 # Pre-computed bcrypt hash of a fixed dummy password. We compare against

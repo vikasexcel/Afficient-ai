@@ -59,6 +59,11 @@ class AuthRepository:
         return session
 
     @staticmethod
+    def get_user_by_reset_token(db: DBSession, token: str):
+        stmt = select(User).where(User.reset_token == token)
+        return db.execute(stmt).scalar_one_or_none()
+
+    @staticmethod
     def create_audit(db,audit,):
         db.add(audit)
         db.flush()

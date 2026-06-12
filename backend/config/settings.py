@@ -273,6 +273,23 @@ class Settings(BaseSettings):
     # HTTP timeout (seconds) for the scheduler -> FastAPI dispatch request.
     CAMPAIGN_DISPATCH_HTTP_TIMEOUT_SECONDS: float = 30.0
 
+    # ------------------------------------------------------------------
+    # Google Calendar integration
+    # ------------------------------------------------------------------
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    # Must match the Authorized Redirect URI configured in Google Cloud Console.
+    GOOGLE_REDIRECT_URI: str = "https://api.aifuturegroup.co/auth/google/callback"
+    # Fernet key for encrypting OAuth tokens at rest.
+    # Generate: from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())
+    TOKEN_ENCRYPTION_KEY: str = ""
+    # Default meeting duration when no override is specified (minutes).
+    CALENDAR_DEFAULT_DURATION_MINUTES: int = 30
+    # How many days ahead to search for free slots.
+    CALENDAR_SLOTS_LOOKAHEAD_DAYS: int = 7
+    # Redis TTL for cached free-slot responses (seconds).
+    CALENDAR_SLOTS_CACHE_TTL_SECONDS: int = 300
+
     @property
     def internal_service_token(self) -> str:
         """Effective shared secret for internal service-to-service auth."""
