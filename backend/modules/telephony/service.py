@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 from common.logging import get_logger
 from config.settings import settings
 from database.session import SessionLocal
+from modules.storage.s3_client import get_s3_client
 from modules.telephony.amd import (
     AMD_UNKNOWN,
     AMD_VOICEMAIL,
@@ -1078,6 +1079,148 @@ class TelephonyService:
             await self._reconcile_campaign_execution(row, mapped)
 
         return row
+
+    # ------------------------------------------------------------------
+    # Recording webhook (Twilio → S3)
+    # ------------------------------------------------------------------
+
+    async def handle_recording_webhook(
+        self,
+        *,
+        params: dict[str, Any],
+    ) -> None:
+        """Handle Twilio's RecordingStatus callback.
+
+        Fires when a call recording reaches ``completed``.  Downloads the
+        MP3 from Twilio, uploads it to S3, persists the S3 key on the call
+        row, and optionally deletes the Twilio-hosted copy.
+
+        Silently no-ops on non-``completed`` statuses so Twilio's
+        ``in-progress`` ping (if any) is harmless.
+        """
+
+        recording_status = (params.get("RecordingStatus") or "").lower()
+        if recording_status != "completed":
+            log.debug(
+                "telephony.recording.non_completed",
+                status=recording_status,
+            )
+            return
+
+        call_sid = params.get("CallSid") or ""
+        recording_sid = params.get("RecordingSid") or ""
+        recording_url = params.get("RecordingUrl") or ""
+        duration_str = params.get("RecordingDuration") or "0"
+
+        if not (call_sid and recording_sid and recording_url):
+            log.warning(
+                "telephony.recording.missing_fields",
+                call_sid=call_sid,
+                recording_sid=recording_sid,
+            )
+            return
+
+        row = await asyncio.to_thread(self._fetch_by_sid, call_sid)
+        if row is None:
+            log.warning(
+                "telephony.recording.unknown_call",
+                call_sid=call_sid,
+                recording_sid=recording_sid,
+            )
+            return
+
+        if not settings.S3_RECORDINGS_BUCKET:
+            log.warning(
+                "telephony.recording.s3_not_configured",
+                call_sid=call_sid,
+            )
+            return
+
+        # Twilio recording URL: append .mp3 to request the compressed format.
+        mp3_url = recording_url.rstrip("/") + ".mp3"
+
+        org_segment = str(row.organization_id) if row.organization_id else "no-org"
+        campaign_segment = str(row.campaign_id) if row.campaign_id else "no-campaign"
+        s3_key = (
+            f"recordings/{org_segment}/{campaign_segment}"
+            f"/{call_sid}/{recording_sid}.mp3"
+        )
+
+        s3 = get_s3_client()
+        try:
+            await s3.upload_from_url(
+                mp3_url,
+                s3_key,
+                twilio_account_sid=settings.TWILIO_ACCOUNT_SID,
+                twilio_auth_token=settings.TWILIO_AUTH_TOKEN,
+            )
+        except Exception:
+            log.exception(
+                "telephony.recording.upload_failed",
+                call_sid=call_sid,
+                recording_sid=recording_sid,
+                s3_key=s3_key,
+            )
+            return
+
+        try:
+            duration_seconds = int(duration_str)
+        except (ValueError, TypeError):
+            duration_seconds = None
+
+        with _db_scope() as db:
+            row_fresh = TelephonyCallRepository.get_by_sid(db, call_sid)
+            if row_fresh is not None:
+                TelephonyCallRepository.update_recording(
+                    db,
+                    row_fresh,
+                    recording_sid=recording_sid,
+                    recording_url=s3_key,
+                    recording_duration_seconds=duration_seconds,
+                )
+                TelephonyEventRepository.append(
+                    db,
+                    event_type="recording_uploaded",
+                    call_sid=call_sid,
+                    telephony_call_id=row_fresh.id,
+                    organization_id=row_fresh.organization_id,
+                    source="system",
+                    payload={
+                        "recording_sid": recording_sid,
+                        "s3_key": s3_key,
+                        "duration_seconds": duration_seconds,
+                    },
+                )
+
+        log.info(
+            "telephony.recording.stored",
+            call_sid=call_sid,
+            recording_sid=recording_sid,
+            s3_key=s3_key,
+            duration_seconds=duration_seconds,
+        )
+
+        if settings.RECORDING_DELETE_FROM_TWILIO:
+            await self._delete_twilio_recording(recording_sid)
+
+    async def _delete_twilio_recording(self, recording_sid: str) -> None:
+        """Delete the Twilio-hosted recording to avoid double storage cost."""
+        import asyncio as _asyncio
+
+        def _do() -> None:
+            self._twilio._client.recordings(recording_sid).delete()
+
+        try:
+            await _asyncio.to_thread(_do)
+            log.info(
+                "telephony.recording.twilio_deleted",
+                recording_sid=recording_sid,
+            )
+        except Exception:
+            log.warning(
+                "telephony.recording.twilio_delete_failed",
+                recording_sid=recording_sid,
+            )
 
     # ------------------------------------------------------------------
     # TwiML for /webhooks/voice

@@ -343,3 +343,21 @@ html:not(.dark) select option:disabled {
 }
 
 /* Sidebar/header brand text already use violet for accents — leave alone. */
+
+/* Very low alpha text-white that missed the ranges above */
+html:not(.dark) [class*="text-white/15"],
+html:not(.dark) [class*="text-white/20"] {
+  color: rgb(15 15 18 / 0.4) !important;
+}
+
+/* DM Serif Display / DM Mono headings hardcoded with text-white need to read */
+html:not(.dark) h1.text-white,
+html:not(.dark) h2.text-white,
+html:not(.dark) h3.text-white {
+  color: rgb(15 15 18) !important;
+}
+
+/* Skeleton loaders use bg-white/[0.06] — keep them visible as gray in light */
+html:not(.dark) .animate-pulse[class*="bg-white"] {
+  background-color: rgb(0 0 0 / 0.07) !important;
+}

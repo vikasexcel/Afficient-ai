@@ -12,7 +12,19 @@
  * Cleared after a successful save or launch.
  */
 import { useEffect, useState } from "react";
-import { ArrowLeft, ArrowRight, Loader2, Rocket, Save } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  CalendarClock,
+  CheckCircle2,
+  GitBranch,
+  Loader2,
+  Megaphone,
+  Rocket,
+  Save,
+  Users,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 
@@ -112,40 +124,59 @@ function inferCampaignPlaybookId(nodes: unknown[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
+// Step icons
+// ---------------------------------------------------------------------------
+
+const STEP_ICONS = [Megaphone, Users, GitBranch, CalendarClock, CheckCircle2];
+
+// ---------------------------------------------------------------------------
 // Progress indicator
 // ---------------------------------------------------------------------------
 
 function ProgressIndicator({ current }: { current: number }) {
   return (
-    <div className="flex items-center gap-0 shrink-0">
+    <div className="relative flex items-start justify-between w-full">
+      {/* Background track */}
+      <div className="absolute top-4 left-4 right-4 h-px bg-white/[0.07]" />
+      {/* Filled track */}
+      <div
+        className="absolute top-4 left-4 h-px bg-violet-600/50 transition-all duration-500"
+        style={{ width: `calc(${((current - 1) / (WIZARD_STEPS.length - 1)) * 100}% - 8px)` }}
+      />
+
       {WIZARD_STEPS.map((step, i) => {
         const done = current > step.id;
         const active = current === step.id;
+        const Icon = STEP_ICONS[i];
         return (
-          <div key={step.id} className="flex items-center">
-            <div className="flex items-center gap-1.5">
-              <div
-                className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold transition-colors ${
-                  done
-                    ? "bg-violet-600 text-white"
-                    : active
-                    ? "bg-violet-600/30 border border-violet-500 text-violet-300"
-                    : "bg-white/5 border border-white/10 text-white/25"
-                }`}
-              >
-                {done ? "✓" : step.id}
-              </div>
-              <span
-                className={`text-[11px] font-medium hidden sm:inline transition-colors ${
-                  active ? "text-white/80" : done ? "text-violet-400/70" : "text-white/25"
-                }`}
-              >
-                {step.label}
-              </span>
+          <div key={step.id} className="relative flex flex-col items-center gap-2 z-10">
+            <div
+              className={`w-8 h-8 rounded-full flex items-center justify-center transition-all duration-200 ${
+                done
+                  ? "bg-violet-600 shadow-md shadow-violet-900/60"
+                  : active
+                  ? "bg-violet-600/25 border-2 border-violet-500"
+                  : "bg-[#13131f] border border-white/[0.10]"
+              }`}
+            >
+              {done ? (
+                <CheckCircle2 size={13} className="text-white" />
+              ) : (
+                <Icon size={13} className={active ? "text-violet-300" : "text-white/20"} />
+              )}
             </div>
-            {i < WIZARD_STEPS.length - 1 && (
-              <div className={`w-6 h-px mx-1.5 ${done ? "bg-violet-600/50" : "bg-white/10"}`} />
-            )}
+            <span
+              className={`text-[10px] font-semibold whitespace-nowrap transition-colors ${
+                active
+                  ? "text-violet-300"
+                  : done
+                  ? "text-violet-400/50"
+                  : "text-white/18"
+              }`}
+              style={{ color: active ? undefined : done ? "rgba(167,139,250,0.5)" : "rgba(255,255,255,0.18)" }}
+            >
+              {step.label}
+            </span>
           </div>
         );
       })}
@@ -250,15 +281,41 @@ export default function CampaignWizard({ onClose, onCreated }: Props) {
   const ok = canProceed(step, draft);
   const isLast = step === 5;
 
+  const stepLabel = step === 5 ? "Review & Launch" : (WIZARD_STEPS[step - 1]?.label ?? "");
+
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="flex items-center gap-3 px-6 py-4 border-b border-white/[0.07] shrink-0">
-        <ProgressIndicator current={step} />
+      {/* Gradient hero header */}
+      <div className="relative shrink-0 bg-gradient-to-b from-violet-950/50 to-[#0a0a12] border-b border-white/[0.06]">
+        {/* Close button */}
+        <button
+          onClick={onClose}
+          className="absolute right-4 top-4 text-white/25 hover:text-white/70 transition-colors p-1 rounded-md hover:bg-white/[0.06]"
+        >
+          <X size={15} />
+        </button>
+
+        {/* Title row */}
+        <div className="px-7 pt-5 pb-1">
+          <div className="flex items-center gap-1.5 mb-1">
+            <Megaphone size={13} className="text-violet-400/80" />
+            <span className="text-[10px] text-violet-400/60 uppercase tracking-widest font-bold">
+              New Campaign · Step {step} of {WIZARD_STEPS.length}
+            </span>
+          </div>
+          <h1 className="text-[18px] font-bold text-white tracking-tight leading-tight">
+            {stepLabel}
+          </h1>
+        </div>
+
+        {/* Progress steps */}
+        <div className="px-7 pt-4 pb-5">
+          <ProgressIndicator current={step} />
+        </div>
       </div>
 
       {/* Body */}
-      <div className="flex-1 overflow-y-auto px-6 py-6">
+      <div className="flex-1 overflow-y-auto px-7 py-5">
         {step === 1 && <CampaignDetailsStep draft={draft} onChange={update} />}
         {step === 2 && <LeadListStep draft={draft} onChange={update} />}
         {step === 3 && <WorkflowStep draft={draft} onChange={update} />}
@@ -266,61 +323,113 @@ export default function CampaignWizard({ onClose, onCreated }: Props) {
         {step === 5 && <ReviewLaunchStep draft={draft} />}
       </div>
 
-      {/* Footer navigation */}
-      <div className="flex items-center justify-between px-6 py-4 border-t border-white/[0.07] shrink-0">
-        <Button
-          variant="ghost"
-          onClick={step === 1 ? onClose : back}
-          disabled={submitting}
-          className="text-white/50 hover:text-white"
-        >
-          {step === 1 ? "Cancel" : (
-            <>
-              <ArrowLeft size={13} className="mr-1" /> Back
-            </>
-          )}
-        </Button>
-
-        <div className="flex items-center gap-2">
-          {isLast ? (
-            <>
-              <Button
-                variant="ghost"
-                onClick={() => void submit(false)}
-                disabled={submitting || !draft.name.trim() || !draft.lead_list_id}
-                className="text-white/60 hover:text-white border border-white/10 h-8 px-4"
-              >
-                {submitting ? (
-                  <Loader2 size={13} className="animate-spin mr-1" />
-                ) : (
-                  <Save size={13} className="mr-1" />
-                )}
-                Save Draft
-              </Button>
-              <Button
-                onClick={() => void submit(true)}
-                disabled={submitting || !draft.name.trim() || !draft.lead_list_id}
-                className="bg-violet-600 hover:bg-violet-500 text-white h-8 px-4"
-              >
-                {submitting ? (
-                  <Loader2 size={13} className="animate-spin mr-1" />
-                ) : (
-                  <Rocket size={13} className="mr-1" />
-                )}
-                Launch Campaign
-              </Button>
-            </>
-          ) : (
-            <Button
-              onClick={next}
-              disabled={!ok}
-              className="bg-violet-600 hover:bg-violet-500 text-white h-8 px-5 disabled:opacity-40"
+      {/* Footer */}
+      {isLast ? (
+        /* ── Review & Launch footer ── */
+        <div className="shrink-0 border-t border-white/[0.06]">
+          {/* Action row */}
+          <div className="px-7 pt-4 pb-3 flex flex-col gap-3">
+            {/* Primary CTA — Launch Campaign */}
+            <button
+              onClick={() => void submit(true)}
+              disabled={submitting || !draft.name.trim() || !draft.lead_list_id}
+              className={`
+                relative w-full h-11 rounded-xl font-semibold text-[14px] tracking-wide
+                flex items-center justify-center gap-2
+                transition-all duration-150
+                disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none
+                ${!submitting && draft.name.trim() && draft.lead_list_id
+                  ? "bg-gradient-to-r from-violet-600 to-violet-500 hover:from-violet-500 hover:to-violet-400 active:from-violet-700 active:to-violet-600 text-white shadow-lg shadow-violet-900/50 hover:shadow-violet-700/40 hover:shadow-xl"
+                  : "bg-violet-700/40 text-white/40"
+                }
+              `}
             >
-              Next <ArrowRight size={13} className="ml-1" />
-            </Button>
-          )}
+              {submitting ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : (
+                <Rocket size={16} />
+              )}
+              {submitting ? "Launching…" : "Launch Campaign"}
+            </button>
+
+            {/* Secondary — Save Draft */}
+            <button
+              onClick={() => void submit(false)}
+              disabled={submitting || !draft.name.trim() || !draft.lead_list_id}
+              className="
+                w-full h-10 rounded-xl font-medium text-[13px]
+                flex items-center justify-center gap-2
+                border border-white/[0.10] bg-white/[0.03]
+                text-white/55 hover:text-white/85
+                hover:border-white/[0.18] hover:bg-white/[0.06]
+                active:bg-white/[0.03]
+                transition-all duration-150
+                disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none
+              "
+            >
+              {submitting ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <Save size={14} className="text-white/40" />
+              )}
+              Save Draft
+            </button>
+          </div>
+
+          {/* Back link + validation note */}
+          <div className="px-7 pb-4 flex items-center justify-between">
+            <button
+              onClick={back}
+              disabled={submitting}
+              className="flex items-center gap-1.5 text-[12px] text-white/30 hover:text-white/60 transition-colors disabled:opacity-40"
+            >
+              <ArrowLeft size={12} /> Back to Schedule
+            </button>
+            {(!draft.name.trim() || !draft.lead_list_id) && (
+              <span className="text-[11px] text-amber-400/60 flex items-center gap-1">
+                <span className="w-1 h-1 rounded-full bg-amber-400/60 inline-block" />
+                {!draft.name.trim() ? "Campaign name required" : "Lead list required"}
+              </span>
+            )}
+          </div>
         </div>
-      </div>
+      ) : (
+        /* ── Steps 1–4 footer ── */
+        <div className="flex items-center justify-between px-7 py-4 border-t border-white/[0.06] bg-white/[0.01] shrink-0">
+          <Button
+            variant="ghost"
+            onClick={step === 1 ? onClose : back}
+            disabled={submitting}
+            className="text-white/35 hover:text-white/70 hover:bg-white/[0.05] h-9 px-3 gap-1.5 text-[13px]"
+          >
+            {step === 1 ? "Cancel" : <><ArrowLeft size={13} /> Back</>}
+          </Button>
+
+          {/* Step dots */}
+          <div className="flex items-center gap-1.5">
+            {WIZARD_STEPS.map((s) => (
+              <div
+                key={s.id}
+                className={`rounded-full transition-all duration-200 ${
+                  s.id === step
+                    ? "w-5 h-1.5 bg-violet-500"
+                    : s.id < step
+                    ? "w-1.5 h-1.5 bg-violet-600/50"
+                    : "w-1.5 h-1.5 bg-white/10"
+                }`}
+              />
+            ))}
+          </div>
+
+          <Button
+            onClick={next}
+            disabled={!ok}
+            className="bg-violet-600 hover:bg-violet-500 active:bg-violet-700 text-white h-9 px-5 gap-1.5 text-[13px] font-medium shadow-md shadow-violet-900/30 disabled:opacity-40 rounded-lg"
+          >
+            Continue <ArrowRight size={13} />
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

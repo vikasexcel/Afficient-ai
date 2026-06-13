@@ -188,6 +188,25 @@ class TelephonyCall(BaseModel):
         Text, nullable=True
     )
 
+    # ----------------------------------------------------------------- #
+    # Call recording (Twilio → S3).
+    # ``recording_sid`` is the Twilio RecordingSid (RExxx…). Once the
+    # recording is uploaded to S3 ``recording_url`` holds the S3 object
+    # key (relative path within ``S3_RECORDINGS_BUCKET``). Use the
+    # ``GET /telephony/calls/{id}/recording`` endpoint to obtain a
+    # time-limited presigned URL for playback.
+    # ----------------------------------------------------------------- #
+    recording_sid: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    recording_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recording_duration_seconds: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    recording_uploaded_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+
     # Free-form bag — used for opening_line, persona, extra_context,
     # answer-machine detection results, etc. Persisted as JSON so the
     # row stays append-friendly without a schema bump.

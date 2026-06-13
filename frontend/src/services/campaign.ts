@@ -125,6 +125,11 @@ export async function activateCampaign(
   return res.data;
 }
 
+export async function pauseCampaign(campaignId: string): Promise<CampaignOut> {
+  const res = await api.post<CampaignOut>(`/campaigns/${campaignId}/pause`);
+  return res.data;
+}
+
 /* -------------------------------------------------------------------------- */
 /* Metrics + voicemail (AMD / Voicemail Drop)                                 */
 /* -------------------------------------------------------------------------- */

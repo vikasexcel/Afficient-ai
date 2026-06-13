@@ -46,6 +46,7 @@ from modules.telephony.schema import (
     RetryCallResponse,
     WebhookAck,
 )
+from modules.storage.s3_client import get_s3_client
 from modules.telephony.service import TelephonyService
 from modules.telephony.twilio_client import TwilioClient
 
@@ -167,6 +168,10 @@ def _row_to_response(row: TelephonyCall) -> CallResponse:
         voicemail_dropped=bool(row.voicemail_dropped),
         voicemail_dropped_at=_tz(row.voicemail_dropped_at),
         voicemail_recording_url=row.voicemail_recording_url,
+        recording_sid=row.recording_sid,
+        recording_url=row.recording_url,
+        recording_duration_seconds=row.recording_duration_seconds,
+        recording_uploaded_at=_tz(row.recording_uploaded_at),
         extra=row.extra,
         created_at=_tz(row.created_at),
         updated_at=_tz(row.updated_at),
@@ -747,6 +752,86 @@ async def webhook_amd(
         )
 
     return WebhookAck(ok=True, call_sid=call_sid or None, status=None)
+
+
+@router.post(
+    "/webhooks/recording",
+    response_model=WebhookAck,
+)
+async def webhook_recording(
+    request: Request,
+    twilio: TwilioClient = Depends(get_twilio_client),
+    svc: TelephonyService = Depends(get_telephony_service),
+):
+    """Twilio RecordingStatus callback.
+
+    Fires when a call recording reaches ``completed``.  Validates the
+    Twilio signature, then hands off to the service which downloads the
+    MP3, uploads it to S3, and persists the S3 key on the call row.
+    """
+
+    form_dict = dict((await request.form()).multi_items())
+
+    log.info(
+        "telephony.webhook.recording.received",
+        call_sid=form_dict.get("CallSid"),
+        recording_sid=form_dict.get("RecordingSid"),
+        status=form_dict.get("RecordingStatus"),
+        duration=form_dict.get("RecordingDuration"),
+    )
+
+    try:
+        await _verify_twilio_signature(request, twilio, form_dict)
+    except InvalidWebhookSignatureError as exc:
+        raise _to_http(exc) from exc
+
+    await svc.handle_recording_webhook(params=form_dict)
+
+    return WebhookAck(
+        ok=True,
+        call_sid=form_dict.get("CallSid"),
+        status=form_dict.get("RecordingStatus"),
+    )
+
+
+@router.get("/calls/{call_id}/recording")
+async def get_recording_url(
+    call_id: uuid.UUID,
+    tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
+    svc: TelephonyService = Depends(get_telephony_service),
+):
+    """Return a short-lived presigned S3 URL for call recording playback.
+
+    The ``recording_url`` field on the call row is the S3 object key
+    (not directly fetchable).  This endpoint generates a presigned GET
+    URL valid for ``S3_PRESIGNED_URL_EXPIRES`` seconds (default 1 hour).
+
+    Returns ``{"presigned_url": "...", "expires_in": 3600}`` or
+    ``{"presigned_url": null}`` when no recording has been stored yet.
+    """
+    row = await svc.get_call(call_id)
+    if row is None:
+        raise HTTPException(404, "call not found")
+    org = _tenant_org_id(tenant)
+    if row.organization_id is not None and org is not None and row.organization_id != org:
+        raise HTTPException(404, "call not found")
+
+    if not row.recording_url:
+        return {"presigned_url": None, "expires_in": None}
+
+    if not settings.S3_RECORDINGS_BUCKET:
+        raise HTTPException(503, "S3 recording storage is not configured")
+
+    try:
+        url = get_s3_client().presigned_url(row.recording_url)  # noqa: E501
+    except Exception as exc:
+        log.exception("telephony.recording.presign_error", call_id=call_id)
+        raise HTTPException(500, "failed to generate recording URL") from exc
+
+    return {
+        "presigned_url": url,
+        "expires_in": settings.S3_PRESIGNED_URL_EXPIRES,
+    }
 
 
 @router.post(

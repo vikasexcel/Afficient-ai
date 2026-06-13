@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   Clock,
   Copy,
   Download,
+  ExternalLink,
   FileText,
   Loader2,
   Phone,
@@ -236,6 +238,11 @@ export default function Transcripts() {
                         </div>
                         <SentimentDot sentiment={sent} />
                       </div>
+                      {c.lead_name && (
+                        <div className="text-[12px] text-white/70 font-medium mt-0.5 truncate">
+                          {c.lead_name}
+                        </div>
+                      )}
                       <div className="text-[11px] text-white/45 mt-0.5 truncate">
                         {c.playbook_name ?? c.persona ?? "—"} ·{" "}
                         {c.framework ?? "BANT"}
@@ -433,6 +440,15 @@ function TranscriptDetail({
               {call.playbook_version ? ` · v${call.playbook_version}` : ""} ·{" "}
               {call.qualification_status ?? "in progress"}
             </div>
+            {call.lead_id && (
+              <Link
+                to={`/leads?id=${call.lead_id}`}
+                className="inline-flex items-center gap-1 mt-1.5 text-[11px] text-violet-400 hover:text-violet-300 transition-colors"
+              >
+                <ExternalLink size={11} />
+                {call.lead_name ? `View CRM: ${call.lead_name}` : "View lead in CRM"}
+              </Link>
+            )}
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
@@ -571,9 +587,11 @@ function TranscriptDetail({
         )}
 
         <div className="space-y-3">
-          {entries.map((turn, i) => (
-            <TurnRow key={i} turn={turn} />
-          ))}
+          {entries.map((turn, i) => {
+            const firstTs = entries[0]?.ts ? new Date(entries[0].ts).getTime() : 0;
+            const elapsedMs = firstTs ? new Date(turn.ts).getTime() - firstTs : null;
+            return <TurnRow key={i} turn={turn} elapsedMs={elapsedMs} />;
+          })}
         </div>
       </div>
       </div>
@@ -581,11 +599,21 @@ function TranscriptDetail({
   );
 }
 
-function TurnRow({ turn }: { turn: TranscriptEntry }) {
+function formatElapsed(ms: number | null): string | null {
+  if (ms == null || ms < 0) return null;
+  const s = Math.round(ms / 1000);
+  const min = Math.floor(s / 60);
+  const sec = s % 60;
+  if (min === 0) return `+${sec}s`;
+  return `+${min}m${sec.toString().padStart(2, "0")}s`;
+}
+
+function TurnRow({ turn, elapsedMs }: { turn: TranscriptEntry; elapsedMs: number | null }) {
   const isAssistant = turn.role === "assistant";
   const isUser = turn.role === "user";
   const tag = isAssistant ? "AI" : isUser ? "U" : turn.role.slice(0, 1).toUpperCase();
   const label = isAssistant ? "Assistant" : isUser ? "User" : turn.role;
+  const elapsed = formatElapsed(elapsedMs);
 
   return (
     <div className="flex gap-3">
@@ -605,7 +633,9 @@ function TurnRow({ turn }: { turn: TranscriptEntry }) {
         <div className="flex items-center gap-2 text-[11px] text-white/45">
           <span className="font-medium text-white/65">{label}</span>
           <span>·</span>
-          <span>{new Date(turn.ts).toLocaleTimeString()}</span>
+          <span title={new Date(turn.ts).toLocaleString()}>
+            {elapsed ?? new Date(turn.ts).toLocaleTimeString()}
+          </span>
           {turn.latency_ms != null && (
             <>
               <span>·</span>

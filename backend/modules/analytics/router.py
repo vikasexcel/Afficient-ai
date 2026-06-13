@@ -21,6 +21,7 @@ from modules.analytics.schema import (
     EmailAnalyticsResponse,
     FunnelResponse,
     LinkedInAnalyticsResponse,
+    MeetingsTrendResponse,
     OverviewResponse,
     TrendsResponse,
     WorkflowAnalyticsResponse,
@@ -139,6 +140,16 @@ async def workflow_analytics(
 # ---------------------------------------------------------------------------
 # Trends
 # ---------------------------------------------------------------------------
+
+
+@router.get("/meetings", response_model=MeetingsTrendResponse)
+async def meetings_trend(
+    days: int = Depends(_days_param),
+    db: Session = Depends(get_db),
+    tenant=Depends(get_current_tenant),
+):
+    """Meetings booked per day, broken down by campaign."""
+    return AnalyticsRepository.meetings_trend(db, _org_uuid(tenant), days)
 
 
 @router.get("/trends", response_model=TrendsResponse)

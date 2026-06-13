@@ -74,6 +74,8 @@ export type CampaignOut = {
   playbook_name: string | null;
   lead_list_name: string | null;
   lead_count: number | null;
+  executions_completed: number | null;
+  meetings_booked: number | null;
 };
 
 export type Weekday = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";

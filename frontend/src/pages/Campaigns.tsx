@@ -7,6 +7,7 @@ import {
   GitBranch,
   Loader2,
   Megaphone,
+  PauseCircle,
   Pencil,
   Plus,
   Rocket,
@@ -26,6 +27,7 @@ import {
   activateCampaign,
   deleteCampaign,
   listCampaigns,
+  pauseCampaign,
 } from "@/services/campaign";
 import { useMe, canUseCampaigns } from "@/store/me";
 import type { CampaignOut } from "@/types/campaign";
@@ -102,6 +104,19 @@ export default function Campaigns() {
     }
   }
 
+  async function handlePause(c: CampaignOut) {
+    setBusyId(c.id);
+    try {
+      await pauseCampaign(c.id);
+      toast.success(`"${c.name}" paused`);
+      await refresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Pause failed");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   return (
     <AppLayout>
       <div className="max-w-6xl space-y-6">
@@ -145,6 +160,7 @@ export default function Campaigns() {
             onEdit={setEditing}
             onDelete={handleDelete}
             onLaunch={handleLaunch}
+            onPause={handlePause}
             onVoicemail={setVoicemailFor}
           />
         )}
@@ -217,6 +233,7 @@ function CampaignsList({
   onEdit,
   onDelete,
   onLaunch,
+  onPause,
   onVoicemail,
 }: {
   campaigns: CampaignOut[];
@@ -225,6 +242,7 @@ function CampaignsList({
   onEdit: (c: CampaignOut) => void;
   onDelete: (id: string) => void;
   onLaunch: (c: CampaignOut) => void;
+  onPause: (c: CampaignOut) => void;
   onVoicemail: (c: CampaignOut) => void;
 }) {
   return (
@@ -238,6 +256,7 @@ function CampaignsList({
           onEdit={onEdit}
           onDelete={onDelete}
           onLaunch={onLaunch}
+          onPause={onPause}
           onVoicemail={onVoicemail}
         />
       ))}
@@ -252,6 +271,7 @@ function CampaignCard({
   onEdit,
   onDelete,
   onLaunch,
+  onPause,
   onVoicemail,
 }: {
   campaign: CampaignOut;
@@ -260,6 +280,7 @@ function CampaignCard({
   onEdit: (c: CampaignOut) => void;
   onDelete: (id: string) => void;
   onLaunch: (c: CampaignOut) => void;
+  onPause: (c: CampaignOut) => void;
   onVoicemail: (c: CampaignOut) => void;
 }) {
   const navigate = useNavigate();
@@ -282,6 +303,8 @@ function CampaignCard({
 
   const canLaunch =
     canCreate && ["draft", "scheduled", "paused"].includes(campaign.status);
+  const canPause =
+    canCreate && campaign.status === "active";
 
   return (
     <div className="rounded-[12px] border border-white/[0.07] bg-white/[0.02] p-4 hover:bg-white/[0.03] transition-colors flex flex-col">
@@ -322,15 +345,15 @@ function CampaignCard({
       </div>
 
       {canCreate && (
-        <div className="mt-3 pt-3 border-t border-white/[0.05] flex justify-end gap-1.5">
+        <div className="mt-3 pt-3 border-t border-white/[0.05] flex flex-wrap items-center gap-x-0.5 gap-y-1">
           <Button
             variant="ghost"
             size="xs"
             disabled={busy}
             onClick={() => navigate(`/campaigns/${campaign.id}/workflow`)}
-            className="text-white/55 hover:text-sky-200"
+            className="text-white/55 hover:text-sky-200 px-2 h-7 text-[11px]"
           >
-            <GitBranch size={12} />
+            <GitBranch size={11} />
             Workflow
           </Button>
           <Button
@@ -338,9 +361,9 @@ function CampaignCard({
             size="xs"
             disabled={busy}
             onClick={() => navigate(`/campaigns/${campaign.id}/monitor`)}
-            className="text-white/55 hover:text-emerald-200"
+            className="text-white/55 hover:text-emerald-200 px-2 h-7 text-[11px]"
           >
-            <Activity size={12} />
+            <Activity size={11} />
             Monitor
           </Button>
           <Button
@@ -348,9 +371,9 @@ function CampaignCard({
             size="xs"
             disabled={busy}
             onClick={() => onVoicemail(campaign)}
-            className="text-white/55 hover:text-violet-200"
+            className="text-white/55 hover:text-violet-200 px-2 h-7 text-[11px]"
           >
-            <Voicemail size={12} />
+            <Voicemail size={11} />
             Voicemail
           </Button>
           {canLaunch && (
@@ -359,24 +382,41 @@ function CampaignCard({
               size="xs"
               disabled={busy}
               onClick={() => onLaunch(campaign)}
-              className="text-emerald-300/80 hover:text-emerald-200"
+              className="text-emerald-300/80 hover:text-emerald-200 px-2 h-7 text-[11px]"
             >
               {busy ? (
-                <Loader2 size={12} className="animate-spin" />
+                <Loader2 size={11} className="animate-spin" />
               ) : (
-                <Rocket size={12} />
+                <Rocket size={11} />
               )}
               Launch
             </Button>
           )}
+          {canPause && (
+            <Button
+              variant="ghost"
+              size="xs"
+              disabled={busy}
+              onClick={() => onPause(campaign)}
+              className="text-amber-300/80 hover:text-amber-200 px-2 h-7 text-[11px]"
+            >
+              {busy ? (
+                <Loader2 size={11} className="animate-spin" />
+              ) : (
+                <PauseCircle size={11} />
+              )}
+              Pause
+            </Button>
+          )}
+          <div className="flex-1" />
           <Button
             variant="ghost"
             size="xs"
             disabled={busy}
             onClick={() => onEdit(campaign)}
-            className="text-white/55 hover:text-white"
+            className="text-white/55 hover:text-white px-2 h-7 text-[11px]"
           >
-            <Pencil size={12} />
+            <Pencil size={11} />
             Edit
           </Button>
           <Button
@@ -384,9 +424,9 @@ function CampaignCard({
             size="xs"
             disabled={busy}
             onClick={() => onDelete(campaign.id)}
-            className="text-white/45 hover:text-red-300"
+            className="text-white/45 hover:text-red-300 px-2 h-7 text-[11px]"
           >
-            <Trash2 size={12} />
+            <Trash2 size={11} />
             Delete
           </Button>
         </div>

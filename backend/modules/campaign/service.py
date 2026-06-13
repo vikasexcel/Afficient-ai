@@ -151,14 +151,18 @@ class CampaignService:
 
     @staticmethod
     def _enrich(db: Session, rows: list[Campaign]) -> list[CampaignOut]:
+        import uuid as _uuid
         playbook_ids = {r.playbook_id for r in rows if r.playbook_id}
         list_ids = {r.lead_list_id for r in rows if r.lead_list_id}
+        campaign_ids = [r.id for r in rows]
         pb_names = CampaignRepository.playbook_names(db, playbook_ids)
         ll_info = CampaignRepository.lead_list_info(db, list_ids)
+        outcome_counts = ExecutionRepository.bulk_outcome_counts(db, campaign_ids)
 
         out: list[CampaignOut] = []
         for r in rows:
             name, count = ll_info.get(r.lead_list_id, (None, None))
+            oc = outcome_counts.get(r.id, {})
             out.append(
                 CampaignOut(
                     id=r.id,
@@ -178,6 +182,8 @@ class CampaignService:
                     playbook_name=pb_names.get(r.playbook_id),
                     lead_list_name=name,
                     lead_count=count,
+                    executions_completed=oc.get("completed", 0),
+                    meetings_booked=oc.get("meetings_booked", 0),
                 )
             )
         return out

@@ -160,3 +160,25 @@ class WorkflowAnalyticsResponse(BaseModel):
 class TrendsResponse(BaseModel):
     executions_per_day: list[DailyExecutionPoint]
     campaign_growth: list[DailyDataPoint]
+
+
+# ---------------------------------------------------------------------------
+# Meetings booked trend
+# ---------------------------------------------------------------------------
+
+
+class MeetingsCampaignPoint(BaseModel):
+    campaign_id: str
+    campaign_name: str
+    count: int
+
+
+class MeetingsDailyPoint(BaseModel):
+    date: str
+    total: int
+    by_campaign: list[MeetingsCampaignPoint]
+
+
+class MeetingsTrendResponse(BaseModel):
+    total: int
+    daily: list[MeetingsDailyPoint]

@@ -17,6 +17,7 @@ import CallAnalytics from "@/components/analytics/CallAnalytics";
 import LinkedInAnalytics from "@/components/analytics/LinkedInAnalytics";
 import FunnelAnalytics from "@/components/analytics/FunnelAnalytics";
 import WorkflowAnalytics from "@/components/analytics/WorkflowAnalytics";
+import MeetingsChart from "@/components/analytics/MeetingsChart";
 import { cn } from "@/lib/utils";
 import {
   analyticsApi,
@@ -24,6 +25,7 @@ import {
   type EmailAnalyticsData,
   type FunnelData,
   type LinkedInAnalyticsData,
+  type MeetingsTrendData,
   type OverviewData,
   type TrendsData,
   type WorkflowAnalyticsData,
@@ -129,6 +131,7 @@ const EMPTY_WORKFLOW: WorkflowAnalyticsData = {
   total_executions_in_period: 0,
 };
 const EMPTY_TRENDS: TrendsData = { executions_per_day: [], campaign_growth: [] };
+const EMPTY_MEETINGS: MeetingsTrendData = { total: 0, daily: [] };
 
 // ---------------------------------------------------------------------------
 // Component
@@ -147,12 +150,13 @@ export default function Analytics() {
   const [funnel, setFunnel] = useState<FunnelData>(EMPTY_FUNNEL);
   const [workflow, setWorkflow] = useState<WorkflowAnalyticsData>(EMPTY_WORKFLOW);
   const [trends, setTrends] = useState<TrendsData>(EMPTY_TRENDS);
+  const [meetings, setMeetings] = useState<MeetingsTrendData>(EMPTY_MEETINGS);
 
   const load = useCallback(async (days: Range) => {
     setLoading(true);
     setError(null);
     try {
-      const [ov, em, ca, li, fu, wf, tr] = await Promise.all([
+      const [ov, em, ca, li, fu, wf, tr, mt] = await Promise.all([
         analyticsApi.overview(days),
         analyticsApi.email(days),
         analyticsApi.calls(days),
@@ -160,6 +164,7 @@ export default function Analytics() {
         analyticsApi.funnel(days),
         analyticsApi.workflow(days),
         analyticsApi.trends(days),
+        analyticsApi.meetings(days),
       ]);
       setOverview(ov);
       setEmail(em);
@@ -168,6 +173,7 @@ export default function Analytics() {
       setFunnel(fu);
       setWorkflow(wf);
       setTrends(tr);
+      setMeetings(mt);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to load analytics");
     } finally {
@@ -323,7 +329,10 @@ export default function Analytics() {
         {!loading && (
           <div>
             {tab === "overview" && (
-              <AnalyticsDashboard overview={overview} trends={trends} />
+              <div className="space-y-6">
+                <AnalyticsDashboard overview={overview} trends={trends} />
+                <MeetingsChart data={meetings} />
+              </div>
             )}
             {tab === "campaigns" && (
               <CampaignAnalytics overview={overview} />

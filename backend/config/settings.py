@@ -238,6 +238,22 @@ class Settings(BaseSettings):
     # ``{TWILIO_PUBLIC_BASE_URL}{VOICEMAIL_PUBLIC_ROUTE}/{filename}``.
     VOICEMAIL_PUBLIC_ROUTE: str = "/media/voicemail"
 
+    # ------------------------------------------------------------------
+    # AWS / S3 — call recording storage
+    # ------------------------------------------------------------------
+    # On EC2 with an IAM role these can be left blank; boto3 auto-discovers
+    # the role credentials. Set them explicitly when using IAM user keys.
+    AWS_ACCESS_KEY_ID: str = ""
+    AWS_SECRET_ACCESS_KEY: str = ""
+    AWS_REGION: str = "eu-west-2"
+    # Bucket where completed call recordings are stored.
+    S3_RECORDINGS_BUCKET: str = ""
+    # Lifetime of presigned GET URLs returned to the frontend (seconds).
+    S3_PRESIGNED_URL_EXPIRES: int = 3600
+    # Delete the Twilio-hosted copy after a successful S3 upload to avoid
+    # double storage charges. Set False to keep the Twilio copy as backup.
+    RECORDING_DELETE_FROM_TWILIO: bool = True
+
     # When True, the campaign execution worker places a real outbound
     # telephony call (Twilio + AMD + voicemail drop) per lead instead of the
     # legacy LLM-plan stub. The terminal call outcome is reconciled back onto

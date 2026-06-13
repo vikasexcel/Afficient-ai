@@ -341,6 +341,36 @@ async def finalize_call(
 # ---------------------------------------------------------------------------
 
 
+@router.get("/calls/search")
+async def search_calls(
+    q: str = Query(default="", description="Full-text search across transcript content"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    tenant=Depends(requires(Role.OWNER, Role.ADMIN, Role.AGENT)),
+):
+    """Search transcripts by content (ILIKE substring match on entry content)."""
+    from sqlalchemy import select as sa_select, func as sa_func
+    from modules.ai.model import AICall, AITranscriptEntry
+
+    org = _tenant_org_id(tenant)
+    q = q.strip()
+
+    # Find call_ids whose transcript entries match the query
+    base = (
+        sa_select(AITranscriptEntry.call_id, sa_func.count(AITranscriptEntry.id).label("matches"))
+        .where(
+            AITranscriptEntry.content.ilike(f"%{q}%"),
+        )
+    )
+    if org:
+        base = base.where(AITranscriptEntry.organization_id == org)
+    base = base.group_by(AITranscriptEntry.call_id).order_by(sa_func.count(AITranscriptEntry.id).desc())
+
+    rows = db.execute(base.offset(offset).limit(limit)).all()
+    return {"query": q, "results": [{"call_id": r.call_id, "matches": r.matches} for r in rows]}
+
+
 @router.get("/calls", response_model=CallListResponse)
 async def list_calls(
     limit: int = Query(default=50, ge=1, le=200),
@@ -379,6 +409,17 @@ async def list_calls(
             .all()
         ):
             playbook_names[pb.id] = pb.name
+
+    # Bulk-fetch lead names for calls that have a lead_id.
+    from modules.leads.model import Lead
+    lead_ids = {r.lead_id for r in rows if r.lead_id}
+    lead_names: dict[uuid.UUID, str] = {}
+    if lead_ids:
+        for lead in db.query(Lead).filter(Lead.id.in_(list(lead_ids))).all():
+            display = lead.display_name or " ".join(
+                filter(None, [lead.first_name, lead.last_name])
+            ).strip() or lead.email or str(lead.id)
+            lead_names[lead.id] = display
 
     entries: list[CallListEntry] = []
     for r in rows:
@@ -423,6 +464,8 @@ async def list_calls(
                 total_turns=total_turns,
                 total_tokens=total_tokens,
                 duration_ms=duration_ms,
+                lead_id=str(r.lead_id) if r.lead_id else None,
+                lead_name=lead_names.get(r.lead_id) if r.lead_id else None,
             )
         )
     return CallListResponse(calls=entries)

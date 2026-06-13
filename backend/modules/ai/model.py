@@ -46,6 +46,12 @@ class AICall(BaseModel):
         String(128), unique=True, index=True
     )
 
+    lead_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("leads.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     persona: Mapped[str | None] = mapped_column(String(64), nullable=True)
     framework: Mapped[str | None] = mapped_column(String(16), nullable=True)
     playbook_id: Mapped[uuid.UUID | None] = mapped_column(

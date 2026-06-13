@@ -163,6 +163,8 @@ export type CallListEntry = {
   total_turns: number;
   total_tokens: number;
   duration_ms: number | null;
+  lead_id: string | null;
+  lead_name: string | null;
 };
 
 export async function listCalls(limit = 50): Promise<CallListEntry[]> {

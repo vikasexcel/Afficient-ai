@@ -239,6 +239,25 @@ class TelephonyCallRepository:
         }
 
     @staticmethod
+    def update_recording(
+        db: Session,
+        row: TelephonyCall,
+        *,
+        recording_sid: str,
+        recording_url: str,
+        recording_duration_seconds: int | None = None,
+        recording_uploaded_at: datetime | None = None,
+    ) -> TelephonyCall:
+        """Persist S3 recording metadata on the call row."""
+        row.recording_sid = recording_sid
+        row.recording_url = recording_url
+        if recording_duration_seconds is not None:
+            row.recording_duration_seconds = recording_duration_seconds
+        row.recording_uploaded_at = recording_uploaded_at or datetime.utcnow()
+        db.flush()
+        return row
+
+    @staticmethod
     def delete(db: Session, row: TelephonyCall) -> None:
         """Delete a call row and its associated audit events.
 

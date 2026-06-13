@@ -52,7 +52,7 @@ export function defaultDraft(): WizardDraft {
 
 export const WIZARD_STEPS = [
   { id: 1, label: "Details" },
-  { id: 2, label: "Lead List" },
+  { id: 2, label: "Leads" },
   { id: 3, label: "Workflow" },
   { id: 4, label: "Schedule" },
   { id: 5, label: "Review" },

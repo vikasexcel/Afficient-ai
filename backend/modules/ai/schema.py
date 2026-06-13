@@ -179,6 +179,8 @@ class CallListEntry(BaseModel):
     total_turns: int = 0
     total_tokens: int = 0
     duration_ms: int | None = None
+    lead_id: str | None = None
+    lead_name: str | None = None
 
 
 class CallListResponse(BaseModel):

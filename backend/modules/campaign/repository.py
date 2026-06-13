@@ -108,7 +108,19 @@ class CampaignRepository:
             db.execute(
                 delete(Workflow).where(Workflow.id.in_(workflow_ids))
             )
-        # telephony_calls.campaign_id → campaigns.id (no cascade)
+        # telephony_calls.campaign_id → campaigns.id (no cascade).
+        # telephony_events references telephony_calls with no cascade, so
+        # events must be deleted before their parent call rows.
+        from modules.telephony.model import TelephonyEvent
+
+        call_ids_subq = select(TelephonyCall.id).where(
+            TelephonyCall.campaign_id == campaign.id
+        ).scalar_subquery()
+        db.execute(
+            delete(TelephonyEvent).where(
+                TelephonyEvent.telephony_call_id.in_(call_ids_subq)
+            )
+        )
         db.execute(
             delete(TelephonyCall).where(
                 TelephonyCall.campaign_id == campaign.id
@@ -626,6 +638,43 @@ class ExecutionRepository:
             "retry_success_rate": success_rate,
             "average_attempts_per_call": avg_attempts,
         }
+
+    @staticmethod
+    def bulk_outcome_counts(
+        db: Session, campaign_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, dict[str, int]]:
+        """Return ``{campaign_id: {completed, meetings_booked}}`` for a set of campaigns.
+
+        Uses a single SQL query (GROUP BY campaign + outcome) instead of N
+        per-campaign round-trips, making it safe to call from the list endpoint.
+        """
+        if not campaign_ids:
+            return {}
+        rows = db.execute(
+            select(
+                Campaign.id.label("campaign_id"),
+                Execution.outcome,
+                func.count(Execution.id).label("cnt"),
+            )
+            .join(Workflow, Workflow.campaign_id == Campaign.id)
+            .join(Execution, Execution.workflow_id == Workflow.id)
+            .where(
+                Campaign.id.in_(campaign_ids),
+                Execution.outcome.isnot(None),
+            )
+            .group_by(Campaign.id, Execution.outcome)
+        ).all()
+
+        result: dict[uuid.UUID, dict[str, int]] = {c: {"completed": 0, "meetings_booked": 0} for c in campaign_ids}
+        _COMPLETED_OUTCOMES = frozenset({"qualified", "meeting_booked", "completed", "opted_out", "do_not_call"})
+        for row in rows:
+            cid = row.campaign_id
+            outcome = (row.outcome or "").lower()
+            if outcome in _COMPLETED_OUTCOMES:
+                result[cid]["completed"] += row.cnt
+            if outcome == "meeting_booked":
+                result[cid]["meetings_booked"] += row.cnt
+        return result
 
     @staticmethod
     def count_by_node(

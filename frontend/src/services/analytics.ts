@@ -149,6 +149,27 @@ export interface TrendsData {
 }
 
 // ---------------------------------------------------------------------------
+// Meetings booked trend
+// ---------------------------------------------------------------------------
+
+export interface MeetingsCampaignPoint {
+  campaign_id: string;
+  campaign_name: string;
+  count: number;
+}
+
+export interface MeetingsDailyPoint {
+  date: string;
+  total: number;
+  by_campaign: MeetingsCampaignPoint[];
+}
+
+export interface MeetingsTrendData {
+  total: number;
+  daily: MeetingsDailyPoint[];
+}
+
+// ---------------------------------------------------------------------------
 // API calls
 // ---------------------------------------------------------------------------
 
@@ -173,4 +194,7 @@ export const analyticsApi = {
 
   trends: (days = 30): Promise<TrendsData> =>
     api.get("/analytics/trends", { params: { days } }).then((r) => r.data),
+
+  meetings: (days = 30): Promise<MeetingsTrendData> =>
+    api.get("/analytics/meetings", { params: { days } }).then((r) => r.data),
 };

@@ -132,6 +132,13 @@ class CallResponse(BaseModel):
     voicemail_dropped: bool = False
     voicemail_dropped_at: datetime | None = None
     voicemail_recording_url: str | None = None
+    # Call recording stored in S3.
+    # ``recording_url`` is the S3 object key; use
+    # ``GET /telephony/calls/{id}/recording`` for a presigned playback URL.
+    recording_sid: str | None = None
+    recording_url: str | None = None
+    recording_duration_seconds: int | None = None
+    recording_uploaded_at: datetime | None = None
     extra: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime

@@ -175,6 +175,7 @@ class TwilioClient:
         status_callback_path: str = "/api/v1/telephony/webhooks/status",
         voice_callback_path: str = "/api/v1/telephony/webhooks/voice",
         amd_callback_path: str = "/api/v1/telephony/webhooks/amd",
+        recording_callback_path: str = "/api/v1/telephony/webhooks/recording",
     ) -> OriginatedCall:
         """Originate one outbound call.
 
@@ -252,9 +253,9 @@ class TwilioClient:
         ):
             kwargs["record"] = True
             kwargs["recording_status_callback"] = (
-                f"{self._public_base_url}{status_callback_path}"
-                f"?room={room_name}&kind=recording"
+                f"{self._public_base_url}{recording_callback_path}"
             )
+            kwargs["recording_status_callback_event"] = ["completed"]
 
         # Answering Machine Detection. ``DetectMessageEnd`` makes Twilio wait
         # for the greeting/beep to finish before fetching the voice TwiML,

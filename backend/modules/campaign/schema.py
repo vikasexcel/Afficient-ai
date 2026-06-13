@@ -164,6 +164,8 @@ class CampaignOut(BaseModel):
     playbook_name: str | None = None
     lead_list_name: str | None = None
     lead_count: int | None = None
+    executions_completed: int | None = None
+    meetings_booked: int | None = None
 
     model_config = {"from_attributes": True}
 

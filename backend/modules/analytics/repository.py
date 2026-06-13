@@ -477,6 +477,64 @@ class AnalyticsRepository:
         }
 
     # ------------------------------------------------------------------ #
+    # Meetings booked trend
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def meetings_trend(db: Session, org_id: uuid.UUID, days: int) -> dict:
+        since = _since(days)
+
+        rows = db.execute(
+            select(
+                func.date_trunc("day", Execution.created_at).label("day"),
+                Campaign.id.label("campaign_id"),
+                Campaign.name.label("campaign_name"),
+                func.count(Execution.id).label("cnt"),
+            )
+            .join(Workflow, Workflow.id == Execution.workflow_id)
+            .join(Campaign, Campaign.id == Workflow.campaign_id)
+            .where(
+                Campaign.organization_id == org_id,
+                Execution.outcome == "meeting_booked",
+                Execution.lead_id.isnot(None),
+                Execution.created_at >= since,
+            )
+            .group_by(
+                func.date_trunc("day", Execution.created_at),
+                Campaign.id,
+                Campaign.name,
+            )
+            .order_by(func.date_trunc("day", Execution.created_at))
+        ).all()
+
+        # Aggregate into {date: {campaign_id: {name, count}}}
+        daily: dict[str, dict[str, dict]] = {}
+        for row in rows:
+            key = row.day.strftime("%Y-%m-%d")
+            if key not in daily:
+                daily[key] = {}
+            cid = str(row.campaign_id)
+            if cid not in daily[key]:
+                daily[key][cid] = {"name": row.campaign_name, "count": 0}
+            daily[key][cid]["count"] += row.cnt
+
+        result = []
+        grand_total = 0
+        for date, campaigns in sorted(daily.items()):
+            day_total = sum(v["count"] for v in campaigns.values())
+            grand_total += day_total
+            result.append({
+                "date": date,
+                "total": day_total,
+                "by_campaign": [
+                    {"campaign_id": cid, "campaign_name": v["name"], "count": v["count"]}
+                    for cid, v in campaigns.items()
+                ],
+            })
+
+        return {"total": grand_total, "daily": result}
+
+    # ------------------------------------------------------------------ #
     # Trends
     # ------------------------------------------------------------------ #
 
